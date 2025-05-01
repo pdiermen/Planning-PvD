@@ -3,10 +3,12 @@ import type { Issue, IssueLink, WorkLog, WorkLogsResponse, EfficiencyData } from
 import * as dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { logger } from './logger.js';
+import logger from './logger';
 import { WorkLogsResponse as OldWorkLogsResponse, EfficiencyTable } from './types';
 import { getSprintCapacityFromSheet, ProjectConfig, getProjectConfigsFromSheet, getGoogleSheetsData } from './google-sheets.js';
 import { format } from 'date-fns';
+import { SprintCapacity } from './types';
+import JiraApi from 'jira-client';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -185,12 +187,6 @@ export async function getSprintName(issue: Issue): Promise<string> {
     }
 }
 
-interface SprintCapacity {
-    assignee: string;
-    capacity: number;
-    sprintId: number;
-}
-
 interface PriorityOrder {
     [key: string]: number;
 }
@@ -217,14 +213,15 @@ export async function getSprintCapacity(): Promise<SprintCapacity[]> {
         const maxSprints = 10;
 
         // Voeg alle medewerkers toe met hun standaard capaciteit
-        Object.entries(defaultCapacities).forEach(([assignee, capacity]) => {
+        Object.entries(defaultCapacities).forEach(([employee, capacity]) => {
             for (let i = 1; i <= maxSprints; i++) {
                 // Check of er een capaciteit uit de sheet is voor deze medewerker en sprint
-                const sheetCapacity = sheetCapacities.find(c => c.assignee === assignee && c.sprintId === i);
+                const sheetCapacity = sheetCapacities.find(c => c.employee === employee && c.sprint === i.toString());
                 capacities.push({
-                    assignee,
+                    employee,
+                    sprint: i.toString(),
                     capacity: sheetCapacity?.capacity || capacity,
-                    sprintId: i
+                    project: ''
                 });
             }
         });
@@ -287,78 +284,63 @@ export async function getPlanning(): Promise<PlanningResult> {
     }
 }
 
-export async function getIssuesForProject(projectCodes: string[], jqlFilter?: string, worklogFilter?: string): Promise<Issue[]> {
-    const allIssues: Issue[] = [];
-    let startAt = 0;
-    const maxResults = 100;
-    let hasMore = true;
-    let totalIssues = 0;
-
-    // Haal de periode filter uit de worklogFilter
-    const periodMatch = worklogFilter?.match(/worklogDate >= "([^"]+)" AND worklogDate <= "([^"]+)"/);
-    const periodFilter = periodMatch ? `AND worklogDate >= "${periodMatch[1]}" AND worklogDate <= "${periodMatch[2]}"` : '';
-
-    while (hasMore) {
-        const jql = `(${projectCodes.map(code => `project = ${code}`).join(' OR ')}) ${jqlFilter ? `AND ${jqlFilter}` : ''} ${periodFilter}`;
-        logger.log(`Volledige JQL Query voor Issues: ${jql}`);
-        
-        const response = await jiraClient.get('/search', {
-            params: {
-                jql,
-                startAt,
-                maxResults,
-                fields: [
-                    'summary',
-                    'issuetype',
-                    'status',
-                    'assignee',
-                    'timeestimate',
-                    'timeoriginalestimate',
-                    'timespent',
-                    'customfield_10014',
-                    'parent',
-                    'issuelinks',
-                    'priority'
-                ]
-            }
-        });
-
-        const issues = response.data.issues.map((issue: any) => ({
-            key: issue.key,
-            fields: {
-                summary: issue.fields.summary,
-                issuetype: issue.fields.issuetype,
-                status: issue.fields.status,
-                assignee: issue.fields.assignee,
-                timeestimate: issue.fields.timeestimate,
-                timeoriginalestimate: issue.fields.timeoriginalestimate,
-                timespent: issue.fields.timespent,
-                customfield_10014: issue.fields.customfield_10014,
-                parent: issue.fields.parent,
-                issuelinks: issue.fields.issuelinks,
-                priority: issue.fields.priority
-            }
-        }));
-
-        allIssues.push(...issues);
-        totalIssues = response.data.total;
-        
-        logger.log(`Aantal issues gevonden in deze batch: ${issues.length}`);
-        logger.log(`Totaal aantal issues tot nu toe: ${allIssues.length}`);
-        logger.log(`Totaal aantal issues volgens Jira: ${totalIssues}`);
-        
-        // Check of er meer resultaten zijn
-        hasMore = allIssues.length < totalIssues;
-        if (hasMore) {
-            logger.log(`Er zijn meer resultaten beschikbaar (totaal: ${totalIssues}). Paginering nodig.`);
-            startAt += maxResults;
-        } else {
-            logger.log(`Alle resultaten opgehaald (totaal: ${totalIssues}).`);
-        }
+function constructJqlQuery(projectConfig: ProjectConfig, startDate?: string, endDate?: string): string {
+    const projectFilter = projectConfig.projectCodes.map(code => `project = ${code}`).join(' OR ');
+    let jql = `(${projectFilter}) AND status != Done`;
+    
+    if (startDate && endDate) {
+        jql += ` AND updated >= "${startDate}" AND updated <= "${endDate}"`;
     }
+    
+    if (projectConfig.jqlFilter) {
+        jql += ` AND ${projectConfig.jqlFilter}`;
+    }
+    
+    return jql;
+}
 
-    logger.log(`Aantal issues gevonden: ${allIssues.length}`);
-    return allIssues;
+export async function getIssuesForProject(projectConfig: ProjectConfig, startDate?: string, endDate?: string): Promise<Issue[]> {
+    try {
+        logger.info({ message: `Start ophalen van issues voor project ${projectConfig.projectName}...` });
+        
+        const jql = constructJqlQuery(projectConfig, startDate, endDate);
+        logger.info({ message: `JQL query: ${jql}` });
+
+        const issues: Issue[] = [];
+        let startAt = 0;
+        const maxResults = 100;
+
+        while (true) {
+            const response = await jiraClient.get('/search', {
+                params: {
+                    jql,
+                    startAt,
+                    maxResults,
+                    fields: ['summary', 'status', 'assignee', 'priority', 'issuetype', 'project', 'created', 'resolutiondate', 'issuelinks', 'parent', 'customfield_10020', 'worklog', 'timeestimate', 'timeoriginalestimate']
+                }
+            });
+
+            if (!response.data.issues || response.data.issues.length === 0) {
+                break;
+            }
+
+            issues.push(...response.data.issues);
+            logger.info({ message: `${response.data.issues.length} issues gevonden in deze batch, totaal ${response.data.total} issues volgens Jira` });
+
+            if (startAt + maxResults >= response.data.total) {
+                break;
+            }
+
+            startAt += maxResults;
+        }
+
+        logger.info({ message: `Totaal ${issues.length} issues gevonden voor project ${projectConfig.projectName}` });
+        return issues;
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error({ message: `Error bij ophalen van issues voor project ${projectConfig.projectName}: ${errorMessage}` });
+        throw error;
+    }
 }
 
 interface JiraWorkLog {

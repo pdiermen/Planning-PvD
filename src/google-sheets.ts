@@ -2,7 +2,8 @@ import { google } from 'googleapis';
 import * as dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { logger } from './logger.js';
+import logger from './logger';
+import { SprintCapacity } from './types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,47 +32,6 @@ const auth = new google.auth.GoogleAuth({
 
 const sheets = google.sheets({ version: 'v4', auth });
 
-export interface SprintCapacity {
-    assignee: string;
-    capacity: number;
-    sprintId: number;
-}
-
-export async function getSprintCapacityFromSheet(): Promise<SprintCapacity[]> {
-    try {
-        logger.log('Start ophalen van sprint capaciteit uit Google Sheet...');
-        
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-            range: 'Sprint Capacity!A2:C', // Pas dit aan naar het juiste bereik in je sheet
-        });
-
-        const rows = response.data.values;
-        if (!rows || rows.length === 0) {
-            logger.error('Geen data gevonden in Google Sheet');
-            throw new Error('Geen data gevonden in Google Sheet');
-        }
-
-        const capacities: SprintCapacity[] = [];
-        rows.forEach((row, index) => {
-            const [assignee, capacity, sprintId] = row;
-            if (assignee && capacity && sprintId) {
-                capacities.push({
-                    assignee,
-                    capacity: parseInt(capacity, 10),
-                    sprintId: parseInt(sprintId, 10)
-                });
-            }
-        });
-
-        logger.log(`${capacities.length} sprint capaciteiten gevonden in Google Sheet`);
-        return capacities;
-    } catch (error: any) {
-        logger.error(`Error bij ophalen van sprint capaciteit uit Google Sheet: ${error.message}`);
-        throw error;
-    }
-}
-
 export interface ProjectConfig {
     projectName: string;
     projectCodes: string[];
@@ -81,38 +41,54 @@ export interface ProjectConfig {
 }
 
 export async function getProjectConfigsFromSheet(): Promise<ProjectConfig[]> {
+    logger.info({ message: 'Start ophalen van project configuraties uit Google Sheet...' });
     try {
-        logger.log('Start ophalen van project configuraties uit Google Sheet...');
-        
-        const response = await sheets.spreadsheets.values.get({
-            spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-            range: 'Projects!A2:E', // Aangepast naar A2:E om ook de worklogJql kolom op te halen
-        });
-
-        const rows = response.data.values;
-        if (!rows || rows.length === 0) {
-            logger.error('Geen project configuraties gevonden in Google Sheet');
-            throw new Error('Geen project configuraties gevonden in Google Sheet');
+        const data = await getGoogleSheetsData('Projects!A1:E');
+        if (!data || data.length === 0) {
+            logger.warn({ message: 'Geen project configuraties gevonden in Google Sheet' });
+            return [];
         }
 
-        const configs: ProjectConfig[] = [];
-        rows.forEach((row, index) => {
-            const [projectName, projectCodes, jqlFilter, worklogName, worklogJql] = row;
-            if (projectName && projectCodes) {
-                configs.push({
-                    projectName,
-                    projectCodes: projectCodes.split(',').map((code: string) => code.trim()),
-                    jqlFilter: jqlFilter || '',
-                    worklogName: worklogName || '',
-                    worklogJql: worklogJql || ''
-                });
-            }
-        });
+        // Log de headers
+        logger.info({ message: `Headers gevonden: ${data[0].join(', ')}` });
 
-        logger.log(`${configs.length} project configuraties gevonden in Google Sheet`);
+        // Skip de header rij
+        const rows = data.slice(1);
+        
+        const configs = rows.map(row => {
+            const projectName = row[0] || '';
+            const projectCodes = (row[1] || '').split(',').map((code: string) => code.trim());
+            const jqlFilter = row[2] || '';
+            const worklogName = row[3] || '';
+            const worklogJql = row[4] || '';
+
+            logger.info({ 
+                message: `Project configuratie gevonden:`, 
+                projectName,
+                projectCodes,
+                jqlFilter,
+                worklogName,
+                worklogJql
+            });
+
+            if (!projectName || projectCodes.length === 0) {
+                logger.warn({ message: `Ongeldige project configuratie gevonden: ${projectName}` });
+                return null;
+            }
+
+            return {
+                projectName,
+                projectCodes,
+                jqlFilter,
+                worklogName,
+                worklogJql
+            };
+        }).filter((config): config is ProjectConfig => config !== null);
+
+        logger.info({ message: `Aantal project configuraties gevonden: ${configs.length}` });
         return configs;
-    } catch (error: any) {
-        logger.error(`Error bij ophalen van project configuraties uit Google Sheet: ${error.message}`);
+    } catch (error) {
+        logger.error({ message: 'Error bij ophalen van project configuraties uit Google Sheet', error });
         throw error;
     }
 }
@@ -158,43 +134,111 @@ export async function getWorklogConfigsFromSheet(): Promise<WorklogConfig[]> {
     }
 }
 
-export async function getGoogleSheetsData() {
+export async function getGoogleSheetsData(range: string) {
   try {
-    logger.log('Start ophalen van Resources sheet data...');
+    logger.log(`Start ophalen van ${range} data...`);
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-      range: 'Employees!A1:H',
+      range: range,
     });
 
     const rows = response.data.values;
     if (!rows || rows.length === 0) {
-      logger.error('Geen data gevonden in Resources sheet');
-      throw new Error('Geen data gevonden in Resources sheet');
+      logger.error(`Geen data gevonden in ${range}`);
+      throw new Error(`Geen data gevonden in ${range}`);
     }
 
-    // Valideer de verplichte kolommen
+    // Valideer de verplichte kolommen op basis van de tab
     const headerRow = rows[0];
-    const nameIndex = headerRow.findIndex(header => header === 'Naam');
-    const projectIndex = headerRow.findIndex(header => header === 'Project');
-    const effectiveHoursIndex = headerRow.findIndex(header => header === 'Effectieve uren');
-
-    if (nameIndex === -1 || projectIndex === -1 || effectiveHoursIndex === -1) {
-      const missingColumns = [];
-      if (nameIndex === -1) missingColumns.push('Naam');
-      if (projectIndex === -1) missingColumns.push('Project');
-      if (effectiveHoursIndex === -1) missingColumns.push('Effectieve uren');
+    if (range.startsWith('Employees!')) {
+      const nameIndex = headerRow.findIndex(header => header === 'Naam');
+      const effectiveHoursIndex = headerRow.findIndex(header => header === 'Effectieve uren');
       
-      if (missingColumns.length > 0) {
-        logger.error(`Verplichte kolommen ontbreken in Resources sheet: ${missingColumns.join(', ')}`);
-        throw new Error(`Verplichte kolommen ontbreken in Resources sheet: ${missingColumns.join(', ')}`);
+      if (nameIndex === -1 || effectiveHoursIndex === -1) {
+        const missingColumns = [];
+        if (nameIndex === -1) missingColumns.push('Naam');
+        if (effectiveHoursIndex === -1) missingColumns.push('Effectieve uren');
+        
+        if (missingColumns.length > 0) {
+          logger.error(`Verplichte kolommen ontbreken in ${range}: ${missingColumns.join(', ')}`);
+          throw new Error(`Verplichte kolommen ontbreken in ${range}: ${missingColumns.join(', ')}`);
+        }
+      }
+    } else if (range.startsWith('Projects!')) {
+      const projectIndex = headerRow.findIndex(header => header === 'Project');
+      const codesIndex = headerRow.findIndex(header => header === 'Codes');
+      
+      if (projectIndex === -1 || codesIndex === -1) {
+        const missingColumns = [];
+        if (projectIndex === -1) missingColumns.push('Project');
+        if (codesIndex === -1) missingColumns.push('Codes');
+        
+        if (missingColumns.length > 0) {
+          logger.error(`Verplichte kolommen ontbreken in ${range}: ${missingColumns.join(', ')}`);
+          throw new Error(`Verplichte kolommen ontbreken in ${range}: ${missingColumns.join(', ')}`);
+        }
       }
     }
 
-    logger.log(`${rows.length} rijen gevonden in Resources sheet`);
+    logger.log(`${rows.length} rijen gevonden in ${range}`);
     return rows;
   } catch (error) {
-    logger.error(`Error bij ophalen van Resources sheet data: ${error instanceof Error ? error.message : error}`);
+    logger.error(`Error bij ophalen van ${range} data: ${error instanceof Error ? error.message : error}`);
     throw error;
   }
+}
+
+export async function getSprintCapacityFromSheet(): Promise<SprintCapacity[]> {
+    try {
+        logger.log('Start ophalen van sprint capaciteit uit Google Sheet...');
+        
+        const response = await sheets.spreadsheets.values.get({
+            spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+            range: 'Employees!A2:H', // Pas dit aan naar het juiste bereik in je sheet
+        });
+
+        const rows = response.data.values;
+        if (!rows || rows.length === 0) {
+            logger.error('Geen data gevonden in Google Sheet');
+            throw new Error('Geen data gevonden in Google Sheet');
+        }
+
+        const capacities: SprintCapacity[] = [];
+        rows.forEach((row, index) => {
+            const [col1, col2, employee, col4, col5, col6, effectiveHours, projects] = row;
+            if (employee && effectiveHours) {
+                const hours = parseFloat(effectiveHours.toString());
+                if (!isNaN(hours)) {
+                    // Genereer capaciteiten voor elke sprint
+                    for (let sprintNumber = 1; sprintNumber <= 5; sprintNumber++) {
+                        if (!projects || projects === '') {
+                            capacities.push({
+                                employee,
+                                sprint: sprintNumber.toString(),
+                                capacity: hours * 2, // 2 weken per sprint
+                                project: ''
+                            });
+                        } else {
+                            const projectList = projects.toString().split(',').map((p: string) => p.trim());
+                            projectList.forEach((project: string) => {
+                                capacities.push({
+                                    employee,
+                                    sprint: sprintNumber.toString(),
+                                    capacity: hours * 2, // 2 weken per sprint
+                                    project: project
+                                });
+                            });
+                        }
+                    }
+                }
+            }
+        });
+
+        logger.log(`${capacities.length} sprint capaciteiten gevonden in Google Sheet`);
+        return capacities;
+    } catch (error: any) {
+        logger.error(`Error bij ophalen van sprint capaciteit uit Google Sheet: ${error.message}`);
+        throw error;
+    }
 } 
