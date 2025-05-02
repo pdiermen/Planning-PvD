@@ -9,7 +9,7 @@ import {
   Paper,
   Typography
 } from '@mui/material';
-import type { WorkLog } from '../types';
+import type { WorkLog } from '../types.js';
 
 interface WorkLogsTableProps {
   workLogs: WorkLog[];
@@ -60,8 +60,8 @@ export const WorkLogsTable: React.FC<WorkLogsTableProps> = ({ workLogs, resource
     // Log het aantal worklogs voor deze medewerker
     console.info(`Aantal worklogs voor deze medewerker: ${logs.length}`);
 
-    // Log het aantal worklogs per categorie
-    const nietGewerktLogs = logs.filter(log => {
+    // Filter logs voor "niet gewerkt"
+    const nietGewerktLogs = logs.filter((log: WorkLog) => {
       const comment = log.comment?.toLowerCase() || '';
       const isNietGewerktComment = comment.includes('niet gewerkt') || 
                                   comment.includes('niet gewerkt') || 
@@ -71,7 +71,8 @@ export const WorkLogsTable: React.FC<WorkLogsTableProps> = ({ workLogs, resource
       return isNietGewerktComment || isNietGewerktIssue;
     });
 
-    const overigeNietDeclarabelLogs = logs.filter(log => {
+    // Filter logs voor "overige niet-declarabel"
+    const overigeNietDeclarabelLogs = logs.filter((log: WorkLog) => {
       const comment = log.comment?.toLowerCase() || '';
       const isOverigeNietDeclarabelComment = comment.includes('overige niet-declarabel') || 
                                             comment.includes('overige niet declarabel') ||
@@ -81,18 +82,20 @@ export const WorkLogsTable: React.FC<WorkLogsTableProps> = ({ workLogs, resource
       return isOverigeNietDeclarabelComment || isOverigeNietDeclarabelIssue;
     });
 
-    // Voor productontwikkeling: alle worklogs die niet in nietGewerkt of overigeNietDeclarabel zitten
-    const productontwikkelingLogs = logs.filter(log => {
-      const isNietGewerkt = nietGewerktLogs.some(nietGewerktLog => 
-          nietGewerktLog.issueKey === log.issueKey && 
-          nietGewerktLog.started === log.started && 
-          getAuthorDisplayName(nietGewerktLog.author) === getAuthorDisplayName(log.author)
+    // Filter logs voor "productontwikkeling"
+    const productontwikkelingLogs = logs.filter((log: WorkLog) => {
+      const isNietGewerkt = nietGewerktLogs.some((nietGewerktLog: WorkLog) =>
+        nietGewerktLog.issueKey === log.issueKey && 
+        nietGewerktLog.started === log.started && 
+        getAuthorDisplayName(nietGewerktLog.author) === getAuthorDisplayName(log.author)
       );
-      const isOverigeNietDeclarabel = overigeNietDeclarabelLogs.some(overigeLog => 
-          overigeLog.issueKey === log.issueKey && 
-          overigeLog.started === log.started && 
-          getAuthorDisplayName(overigeLog.author) === getAuthorDisplayName(log.author)
+      
+      const isOverigeNietDeclarabel = overigeNietDeclarabelLogs.some((overigeLog: WorkLog) =>
+        overigeLog.issueKey === log.issueKey && 
+        overigeLog.started === log.started && 
+        getAuthorDisplayName(overigeLog.author) === getAuthorDisplayName(log.author)
       );
+
       return !isNietGewerkt && !isOverigeNietDeclarabel;
     });
 
@@ -101,9 +104,9 @@ export const WorkLogsTable: React.FC<WorkLogsTableProps> = ({ workLogs, resource
     console.info(`- Overige niet-declarabel: ${overigeNietDeclarabelLogs.length}`);
     console.info(`- Productontwikkeling: ${productontwikkelingLogs.length}`);
 
-    totals.notWorked += nietGewerktLogs.reduce((sum, log) => sum + log.timeSpentSeconds, 0);
-    totals.nonBillable += overigeNietDeclarabelLogs.reduce((sum, log) => sum + log.timeSpentSeconds, 0);
-    totals.productDev += productontwikkelingLogs.reduce((sum, log) => sum + log.timeSpentSeconds, 0);
+    totals.notWorked += nietGewerktLogs.reduce((sum: number, log: WorkLog) => sum + log.timeSpentSeconds, 0);
+    totals.nonBillable += overigeNietDeclarabelLogs.reduce((sum: number, log: WorkLog) => sum + log.timeSpentSeconds, 0);
+    totals.productDev += productontwikkelingLogs.reduce((sum: number, log: WorkLog) => sum + log.timeSpentSeconds, 0);
   });
 
   const grandTotal = totals.notWorked + totals.nonBillable + totals.productDev;

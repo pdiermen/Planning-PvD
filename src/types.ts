@@ -14,9 +14,19 @@ export interface IssueLink {
     };
     inwardIssue?: {
         key: string;
+        fields?: {
+            status?: {
+                name: string;
+            };
+        };
     };
     outwardIssue?: {
         key: string;
+        fields?: {
+            status?: {
+                name: string;
+            };
+        };
     };
 }
 

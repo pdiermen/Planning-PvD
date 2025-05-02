@@ -2,8 +2,8 @@ import { google } from 'googleapis';
 import * as dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import logger from './logger';
-import { SprintCapacity } from './types';
+import logger from './logger.js';
+import { SprintCapacity } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,16 +41,16 @@ export interface ProjectConfig {
 }
 
 export async function getProjectConfigsFromSheet(): Promise<ProjectConfig[]> {
-    logger.info({ message: 'Start ophalen van project configuraties uit Google Sheet...' });
+    logger.info('Start ophalen van project configuraties uit Google Sheet...');
     try {
         const data = await getGoogleSheetsData('Projects!A1:E');
         if (!data || data.length === 0) {
-            logger.warn({ message: 'Geen project configuraties gevonden in Google Sheet' });
+            logger.warn('Geen project configuraties gevonden in Google Sheet');
             return [];
         }
 
         // Log de headers
-        logger.info({ message: `Headers gevonden: ${data[0].join(', ')}` });
+        logger.info(`Headers gevonden: ${data[0].join(', ')}`);
 
         // Skip de header rij
         const rows = data.slice(1);
@@ -62,17 +62,10 @@ export async function getProjectConfigsFromSheet(): Promise<ProjectConfig[]> {
             const worklogName = row[3] || '';
             const worklogJql = row[4] || '';
 
-            logger.info({ 
-                message: `Project configuratie gevonden:`, 
-                projectName,
-                projectCodes,
-                jqlFilter,
-                worklogName,
-                worklogJql
-            });
+            logger.info(`Project configuratie gevonden: ${projectName}`);
 
             if (!projectName || projectCodes.length === 0) {
-                logger.warn({ message: `Ongeldige project configuratie gevonden: ${projectName}` });
+                logger.warn(`Ongeldige project configuratie gevonden: ${projectName}`);
                 return null;
             }
 
@@ -85,10 +78,10 @@ export async function getProjectConfigsFromSheet(): Promise<ProjectConfig[]> {
             };
         }).filter((config): config is ProjectConfig => config !== null);
 
-        logger.info({ message: `Aantal project configuraties gevonden: ${configs.length}` });
+        logger.info(`Aantal project configuraties gevonden: ${configs.length}`);
         return configs;
     } catch (error) {
-        logger.error({ message: 'Error bij ophalen van project configuraties uit Google Sheet', error });
+        logger.error(`Error bij ophalen van project configuraties uit Google Sheet: ${error instanceof Error ? error.message : error}`);
         throw error;
     }
 }

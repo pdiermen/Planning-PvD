@@ -13,9 +13,9 @@ import type { WorkLogsResponse } from './types.js';
 import { JIRA_DOMAIN } from './config.js';
 import axios from 'axios';
 import { getProjectConfigsFromSheet, getWorklogConfigsFromSheet } from './google-sheets.js';
-import { getGoogleSheetsData } from './google-sheets';
-import { getSprintCapacity } from './jira';
-import { PlannedIssue } from './types';
+import { getGoogleSheetsData } from './google-sheets.js';
+import { getSprintCapacity } from './jira.js';
+import path from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -383,11 +383,18 @@ function getPredecessors(issue: JiraIssue): string[] {
     }
     
     // Filter de links om alleen "is a predecessor of" relaties te vinden
-    const predecessorLinks = issue.fields.issuelinks.filter(link => link.type.name === 'is a predecessor of');
+    const predecessorLinks = issue.fields.issuelinks.filter(link => 
+        link.type.name === 'is a predecessor of' && 
+        link.inwardIssue && 
+        typeof link.inwardIssue === 'object' &&
+        'key' in link.inwardIssue &&
+        'fields' in link.inwardIssue &&
+        link.inwardIssue.fields?.status?.name !== 'Closed'
+    );
     
     // Als er voorgangers zijn, log deze informatie
     if (predecessorLinks.length > 0) {
-        console.log(`Issue ${issue.key} heeft ${predecessorLinks.length} voorganger(s):`);
+        console.log(`Issue ${issue.key} heeft ${predecessorLinks.length} actieve voorganger(s):`);
         predecessorLinks.forEach(link => {
             if (link.inwardIssue) {
                 console.log(`  - Voorganger: ${link.inwardIssue.key}`);
@@ -409,15 +416,20 @@ function getSuccessors(issue: JiraIssue): string[] {
         return [];
     }
 
-    
     const successors = issue.fields.issuelinks
         .filter(link => {
             // Een opvolger heeft een relatie met:
             // 1. type.name === 'Predecessor'
             // 2. type.inward === 'is a predecessor of'
+            // 3. status is niet 'Closed'
             const isSuccessor = link.type.name === 'Predecessor' && 
-                              link.type.inward === 'is a predecessor of';
-             return isSuccessor;
+                              link.type.inward === 'is a predecessor of' &&
+                              link.inwardIssue &&
+                              typeof link.inwardIssue === 'object' &&
+                              'key' in link.inwardIssue &&
+                              'fields' in link.inwardIssue &&
+                              link.inwardIssue.fields?.status?.name !== 'Closed';
+            return isSuccessor;
         })
         .map(link => link.inwardIssue?.key)
         .filter((key): key is string => key !== undefined);
@@ -433,13 +445,20 @@ function formatTime(seconds: number | undefined): string {
 // Functie om issues te sorteren volgens de gewenste volgorde
 function sortIssues(issues: JiraIssue[]): JiraIssue[] {
     return issues.sort((a, b) => {
-        // Eerst sorteren op status
-        const statusA = a.fields?.status?.name || '';
-        const statusB = b.fields?.status?.name || '';
+        // Prioriteer issues zonder voorgangers
+        const aHasPredecessors = getPredecessors(a).length > 0;
+        const bHasPredecessors = getPredecessors(b).length > 0;
         
-        if (statusA !== statusB) {
-            // Status volgorde: Resolved, "In Review", Open, Reopend, Registered, Waiting
-            const statusOrder = {
+        if (aHasPredecessors && !bHasPredecessors) return 1;
+        if (!aHasPredecessors && bHasPredecessors) return -1;
+        
+        // Als beide issues voorgangers hebben of geen voorgangers hebben,
+        // sorteer op status
+        const aStatus = a.fields?.status?.name || '';
+        const bStatus = b.fields?.status?.name || '';
+        
+        if (aStatus !== bStatus) {
+            const statusOrder: Record<string, number> = {
                 'Resolved': 0,
                 'In Review': 1,
                 'Open': 2,
@@ -448,31 +467,22 @@ function sortIssues(issues: JiraIssue[]): JiraIssue[] {
                 'Registered': 4,
                 'Waiting': 5
             };
-            const orderA = statusOrder[statusA as keyof typeof statusOrder] ?? 999;
-            const orderB = statusOrder[statusB as keyof typeof statusOrder] ?? 999;
-            return orderA - orderB;
+            return (statusOrder[aStatus] || 999) - (statusOrder[bStatus] || 999);
         }
         
         // Als status gelijk is, sorteer op prioriteit
-        const priorityA = a.fields?.priority?.name || 'Lowest';
-        const priorityB = b.fields?.priority?.name || 'Lowest';
+        const aPriority = a.fields?.priority?.name || 'Lowest';
+        const bPriority = b.fields?.priority?.name || 'Lowest';
         
-        if (priorityA !== priorityB) {
-            // Prioriteit volgorde: Highest, High, Medium, Low, Lowest
-            const priorityOrder = {
-                'Highest': 0,
-                'High': 1,
-                'Medium': 2,
-                'Low': 3,
-                'Lowest': 4
-            };
-            return priorityOrder[priorityA as keyof typeof priorityOrder] - priorityOrder[priorityB as keyof typeof priorityOrder];
+        if (aPriority !== bPriority) {
+            const priorityOrder: Record<string, number> = { 'Highest': 0, 'High': 1, 'Medium': 2, 'Low': 3, 'Lowest': 4 };
+            return (priorityOrder[aPriority] || 4) - (priorityOrder[bPriority] || 4);
         }
         
-        // Als status en prioriteit gelijk zijn, sorteer op creatiedatum
-        const createdA = new Date(a.fields?.created || 0).getTime();
-        const createdB = new Date(b.fields?.created || 0).getTime();
-        return createdA - createdB;
+        // Als status en prioriteit gelijk zijn, sorteer op resterende tijd
+        const aTime = a.fields?.timeestimate || 0;
+        const bTime = b.fields?.timeestimate || 0;
+        return aTime - bTime;
     });
 }
 
@@ -491,9 +501,19 @@ interface Worklog {
     };
 }
 
+interface PlannedIssue {
+    issue: JiraIssue;
+    sprint: string;
+    hours: number;
+    assignee: string;
+    worklogHours?: number;
+    remainingEstimate?: number;
+    key: string;
+}
+
 interface PlanningResult {
     sprintHours: { [key: string]: Array<{ issueKey: string; hours: number; issues: Issue[] }> };
-    plannedIssues: Array<{ issue: JiraIssue; sprint: string; hours: number }>;
+    plannedIssues: PlannedIssue[];
     issues: JiraIssue[];
     sprints: string[];
     sprintAssignments: { [key: string]: Array<{ issue: JiraIssue; sprint: string; hours: number }> };
@@ -586,27 +606,43 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
         // Filter issues op project type
         logger.log(`Totaal aantal issues voor filteren: ${issues.length}`);
         logger.log(`Project type waarop gefilterd wordt: ${projectType}`);
-        
+
         const filteredIssues = issues.filter(issue => {
             const assignee = issue.fields?.assignee?.displayName || 'Niet toegewezen';
             const remainingTime = (issue.fields?.timeestimate || 0) / 3600;
             const successors = getSuccessors(issue);
+            const predecessors = getPredecessors(issue);
+            const predecessorsText = predecessors.length > 0 
+                ? `, Voorgangers: ${predecessors.join(', ')}` 
+                : ', Geen voorgangers';
             const successorsText = successors.length > 0 
                 ? `, Opvolgers: ${successors.join(', ')}` 
                 : ', Geen opvolgers';
-            logger.log(`Issue ${issue.key}: Toegewezen aan ${assignee}, Resterende tijd: ${remainingTime} uur${successorsText}`);
+            logger.log(`Issue ${issue.key}: Toegewezen aan ${assignee}, Resterende tijd: ${remainingTime} uur${predecessorsText}${successorsText}`);
             return true;
         });
         
-        logger.log(`${filteredIssues.length} issues gevonden voor project ${projectType}`);
-        if (filteredIssues.length > 0) {
+        // Sorteer issues op basis van voorgangers (issues zonder voorgangers eerst)
+        const sortedIssues = [...filteredIssues].sort((a, b) => {
+            const aHasPredecessors = getPredecessors(a).length > 0;
+            const bHasPredecessors = getPredecessors(b).length > 0;
+            
+            if (aHasPredecessors && !bHasPredecessors) return 1;
+            if (!aHasPredecessors && bHasPredecessors) return -1;
+            return 0;
+        });
+        
+        logger.log(`${sortedIssues.length} issues gevonden voor project ${projectType}`);
+        if (sortedIssues.length > 0) {
             logger.log('Gevonden issues:');
-            filteredIssues.forEach(issue => {
-                logger.log(`- ${issue.key} (Project: ${issue.fields?.project?.key})`);
+            sortedIssues.forEach(issue => {
+                const predecessors = getPredecessors(issue);
+                const predecessorsText = predecessors.length > 0 ? ` (Voorgangers: ${predecessors.join(', ')})` : ' (Geen voorgangers)';
+                logger.log(`- ${issue.key}${predecessorsText}`);
             });
         }
 
-        if (filteredIssues.length === 0) {
+        if (sortedIssues.length === 0) {
             logger.log('Geen issues gevonden voor dit project');
             return {
                 sprintHours: {},
@@ -618,28 +654,6 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                 employeeSprintUsedHours: {}
             };
         }
-
-        // Log issues informatie
-        logger.log(`Totaal aantal issues: ${issues.length}`);
-        
-        issues.forEach(issue => {
-            const assignee = issue.fields?.assignee?.displayName || 'Niet toegewezen';
-            const remainingTime = (issue.fields?.timeestimate || 0) / 3600;
-            const successors = getSuccessors(issue);
-            const successorsText = successors.length > 0 
-                ? `, Opvolgers: ${successors.join(', ')}` 
-                : ', Geen opvolgers';
-            logger.log(`Issue ${issue.key}: Toegewezen aan ${assignee}, Resterende tijd: ${remainingTime} uur${successorsText}`);
-        });
-
-        // Sorteer de issues
-        const sortedIssues = sortIssues(issues);
-        logger.log('Issues na sortering:');
-        sortedIssues.forEach(issue => {
-            const status = issue.fields?.status?.name || 'Onbekend';
-            const priority = issue.fields?.priority?.name || 'Lowest';
-            logger.log(`- ${issue.key} (Status: ${status}, Prioriteit: ${priority})`);
-        });
 
         // Verzamel alle sprint namen en sorteer ze numeriek
         const sprintNames = [...new Set(sprintCapacities.map((value: SprintCapacity) => value.sprint))]
@@ -667,7 +681,9 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                 planningResult.plannedIssues.push({
                     issue,
                     sprint: sprintName,
-                    hours: issueHours
+                    hours: issueHours,
+                    assignee,
+                    key: issueKey
                 });
 
                 // Update sprint hours
@@ -694,10 +710,10 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
         };
 
         // Functie om voorgangers te plannen
-        const planPredecessors = async (issue: JiraIssue) => {
+        const planPredecessors = async (issue: JiraIssue, currentSprintIndex: number) => {
             const predecessors = getPredecessors(issue);
             for (const predecessorKey of predecessors) {
-                const predecessor = sortedIssues.find(i => i.key === predecessorKey);
+                const predecessor = sortedIssues.find((i: JiraIssue) => i.key === predecessorKey);
                 if (!predecessor) {
                     logger.log(`Voorganger ${predecessorKey} niet gevonden in gefilterde issues`);
                     continue;
@@ -712,19 +728,20 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                 // Check of de voorganger al gepland is
                 const isPredecessorPlanned = planningResult.plannedIssues.some(pi => pi.issue.key === predecessorKey);
                 if (isPredecessorPlanned) {
-                    logger.log(`Voorganger ${predecessorKey} is al gepland`);
+                    logger.log(`Voorganger ${predecessor.key} is al gepland`);
                     continue;
                 }
 
-                // Plan de voorganger in de vroegst mogelijke sprint
+                // Plan de voorganger in de vroegst mogelijke sprint die eerder is dan de huidige sprint
                 let predecessorPlanned = false;
-                for (const sprintName of sprintNames) {
-                    // Zoek de sprint capaciteit voor deze medewerker
+                for (let i = 0; i < currentSprintIndex; i++) {
+                    const sprintName = sprintNames[i];
+                    
+                    // Bereken capaciteit en gebruikte uren
                     let employeeCapacity = 0;
                     let usedHours = 0;
 
-                    // Voor Peter van Diermen, tel de capaciteit van zowel Peter als Unassigned
-                    if (predecessorAssignee === 'Peter van Diermen') {
+                    if (predecessorAssignee === 'Peter van Diermen' || predecessorAssignee === 'Unassigned') {
                         const peterCapacity = sprintCapacities.find(
                             cap => cap.sprint === sprintName && cap.employee === 'Peter van Diermen'
                         );
@@ -732,11 +749,11 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                             cap => cap.sprint === sprintName && cap.employee === 'Unassigned'
                         );
                         
-                        employeeCapacity = (peterCapacity?.capacity || 0) + (unassignedCapacity?.capacity || 0);
-                        
-                        // Bereken gebruikte uren voor beide
+                        if (!peterCapacity || !unassignedCapacity) continue;
+
+                        employeeCapacity = peterCapacity.capacity + unassignedCapacity.capacity;
                         const sprintHours = planningResult.sprintHours[sprintName] || [];
-                        usedHours = sprintHours.reduce((sum, hourData) => {
+                        usedHours = sprintHours.reduce((sum: number, hourData: { issues: { fields?: { assignee?: { displayName: string } } }[]; hours: number }) => {
                             const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
                             if (issueAssignee === 'Peter van Diermen' || issueAssignee === 'Unassigned') {
                                 return sum + hourData.hours;
@@ -752,7 +769,13 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
 
                         employeeCapacity = sprintCapacity.capacity;
                         const sprintHours = planningResult.sprintHours[sprintName] || [];
-                        usedHours = sprintHours.reduce((sum, hourData) => sum + hourData.hours, 0);
+                        usedHours = sprintHours.reduce((sum: number, hourData: { issues: { fields?: { assignee?: { displayName: string } } }[]; hours: number }) => {
+                            const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
+                            if (issueAssignee === predecessorAssignee) {
+                                return sum + hourData.hours;
+                            }
+                            return sum;
+                        }, 0);
                     }
 
                     const issueHours = (predecessor.fields?.timeestimate || 0) / 3600;
@@ -766,134 +789,343 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                 }
 
                 if (!predecessorPlanned) {
-                    // Plaats in sprint 10
+                    // Als er geen eerdere sprint beschikbaar is, plaats in sprint 10
                     planIssue(predecessor, '10', predecessorAssignee);
-                    logger.log(`Voorganger ${predecessor.key} van issue ${issue.key} komt in sprint 10 vanwege onvoldoende capaciteit`);
+                    logger.log(`Voorganger ${predecessor.key} van issue ${issue.key} komt in sprint 10 vanwege onvoldoende capaciteit in eerdere sprints`);
+                }
+            }
+        };
+
+        // Functie om opvolgers te plannen
+        const planSuccessors = async (issue: JiraIssue, currentSprintIndex: number) => {
+            const successors = getSuccessors(issue);
+            for (const successorKey of successors) {
+                const successor = sortedIssues.find((i: JiraIssue) => i.key === successorKey);
+                if (!successor) {
+                    logger.log(`Opvolger ${successorKey} niet gevonden in gefilterde issues`);
+                    continue;
+                }
+
+                const successorAssignee = successor.fields?.assignee?.displayName;
+                if (!successorAssignee) {
+                    logger.log(`Opvolger ${successorKey} heeft geen toegewezen persoon`);
+                    continue;
+                }
+
+                // Check of de opvolger al gepland is
+                const existingPlanning = planningResult.plannedIssues.find(pi => pi.issue.key === successorKey);
+                if (existingPlanning) {
+                    // Als de opvolger al gepland is, controleer of het in een latere sprint is
+                    const existingSprintIndex = sprintNames.indexOf(existingPlanning.sprint);
+                    if (existingSprintIndex <= currentSprintIndex) {
+                        // Verplaats de opvolger naar een latere sprint
+                        logger.log(`Opvolger ${successor.key} is al gepland in sprint ${existingPlanning.sprint}, maar moet in een latere sprint komen`);
+                        
+                        // Verwijder de bestaande planning
+                        planningResult.plannedIssues = planningResult.plannedIssues.filter(pi => pi.issue.key !== successorKey);
+                        if (planningResult.sprintHours[existingPlanning.sprint]) {
+                            planningResult.sprintHours[existingPlanning.sprint] = planningResult.sprintHours[existingPlanning.sprint]
+                                .filter(hourData => hourData.issueKey !== successorKey);
+                        }
+                        if (planningResult.employeeSprintUsedHours[existingPlanning.assignee]?.[existingPlanning.sprint]) {
+                            planningResult.employeeSprintUsedHours[existingPlanning.assignee][existingPlanning.sprint] -= existingPlanning.hours;
+                        }
+                    } else {
+                        logger.log(`Opvolger ${successor.key} is al correct gepland in sprint ${existingPlanning.sprint}`);
+                        continue;
+                    }
+                }
+
+                // Plan de opvolger in de eerstvolgende sprint na de huidige sprint
+                let successorPlanned = false;
+                for (let i = currentSprintIndex + 1; i < sprintNames.length; i++) {
+                    const sprintName = sprintNames[i];
+                    
+                    // Bereken capaciteit en gebruikte uren
+                    let employeeCapacity = 0;
+                    let usedHours = 0;
+
+                    if (successorAssignee === 'Peter van Diermen' || successorAssignee === 'Unassigned') {
+                        const peterCapacity = sprintCapacities.find(
+                            cap => cap.sprint === sprintName && cap.employee === 'Peter van Diermen'
+                        );
+                        const unassignedCapacity = sprintCapacities.find(
+                            cap => cap.sprint === sprintName && cap.employee === 'Unassigned'
+                        );
+                        
+                        if (!peterCapacity || !unassignedCapacity) continue;
+
+                        employeeCapacity = peterCapacity.capacity + unassignedCapacity.capacity;
+                        const sprintHours = planningResult.sprintHours[sprintName] || [];
+                        usedHours = sprintHours.reduce((sum: number, hourData: { issues: { fields?: { assignee?: { displayName: string } } }[]; hours: number }) => {
+                            const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
+                            if (issueAssignee === 'Peter van Diermen' || issueAssignee === 'Unassigned') {
+                                return sum + hourData.hours;
+                            }
+                            return sum;
+                        }, 0);
+                    } else {
+                        const sprintCapacity = sprintCapacities.find(
+                            cap => cap.sprint === sprintName && cap.employee === successorAssignee
+                        );
+                        
+                        if (!sprintCapacity) continue;
+
+                        employeeCapacity = sprintCapacity.capacity;
+                        const sprintHours = planningResult.sprintHours[sprintName] || [];
+                        usedHours = sprintHours.reduce((sum: number, hourData: { issues: { fields?: { assignee?: { displayName: string } } }[]; hours: number }) => {
+                            const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
+                            if (issueAssignee === successorAssignee) {
+                                return sum + hourData.hours;
+                            }
+                            return sum;
+                        }, 0);
+                    }
+
+                    const issueHours = (successor.fields?.timeestimate || 0) / 3600;
+
+                    if (usedHours + issueHours <= employeeCapacity) {
+                        planIssue(successor, sprintName, successorAssignee);
+                        successorPlanned = true;
+                        logger.log(`Opvolger ${successor.key} succesvol gepland in sprint ${sprintName}`);
+                        break;
+                    }
+                }
+
+                if (!successorPlanned) {
+                    // Als er geen latere sprint beschikbaar is, plaats in sprint 10
+                    planIssue(successor, '10', successorAssignee);
+                    logger.log(`Opvolger ${successor.key} van issue ${issue.key} komt in sprint 10 vanwege onvoldoende capaciteit in latere sprints`);
                 }
             }
         };
 
         // Plan issues in volgorde
+        // Eerst issues van andere medewerkers plannen
         for (const issue of sortedIssues) {
             const assignee = issue.fields?.assignee?.displayName;
-            if (!assignee) {
-                logger.log(`Issue ${issue.key} heeft geen toegewezen persoon`);
+            if (!assignee || assignee === 'Peter van Diermen' || assignee === 'Unassigned') continue;
+
+            // Check of het issue al gepland is
+            if (planningResult.plannedIssues.some(pi => pi.issue.key === issue.key)) {
+                logger.log(`Issue ${issue.key} is al gepland`);
                 continue;
             }
 
-            // Extra logging voor specifieke issues
-            if (issue.key === 'EET-6373' || issue.key === 'EET-6195') {
-                logger.log(`Start planning voor issue ${issue.key} (${issue.fields?.summary})`);
-                logger.log(`Toegewezen aan: ${assignee}`);
-                logger.log(`Geschatte uren: ${(issue.fields?.timeestimate || 0) / 3600}`);
-            }
+            // Check of het issue voorgangers heeft van Peter of Unassigned
+            const predecessors = getPredecessors(issue);
+            const hasPeterOrUnassignedPredecessor = predecessors.some(predecessorKey => {
+                const predecessor = sortedIssues.find((i: JiraIssue) => i.key === predecessorKey);
+                if (!predecessor) return false;
+                const predecessorAssignee = predecessor.fields?.assignee?.displayName;
+                return predecessorAssignee === 'Peter van Diermen' || predecessorAssignee === 'Unassigned';
+            });
 
-            // Plan voorgangers eerst
-            await planPredecessors(issue);
+            if (hasPeterOrUnassignedPredecessor) {
+                logger.log(`Issue ${issue.key} wordt overgeslagen omdat het voorgangers heeft van Peter van Diermen of Unassigned`);
+                continue;
+            }
 
             // Plan het issue in de vroegst mogelijke sprint
             let issuePlanned = false;
-            for (const sprintName of sprintNames) {
-                let employeeCapacity = 0;
-                let usedHours = 0;
+            for (let i = 0; i < sprintNames.length; i++) {
+                const sprintName = sprintNames[i];
+                const sprintCapacity = sprintCapacities.find(
+                    cap => cap.sprint === sprintName && cap.employee === assignee
+                );
+                
+                if (!sprintCapacity) continue;
 
-                if (assignee === 'Peter van Diermen') {
-                    // Voor Peter van Diermen, gebruik de resterende capaciteit na andere medewerkers
-                    const peterCapacity = sprintCapacities.find(
-                        cap => cap.sprint === sprintName && cap.employee === 'Peter van Diermen'
-                    );
-                    
-                    if (!peterCapacity) continue;
-
-                    // Bereken totale capaciteit van de sprint
-                    const totalSprintCapacity = sprintCapacities
-                        .filter(cap => cap.sprint === sprintName)
-                        .reduce((sum, cap) => sum + cap.capacity, 0);
-
-                    // Bereken gebruikte uren door andere medewerkers
-                    const sprintHours = planningResult.sprintHours[sprintName] || [];
-                    const otherUsedHours = sprintHours.reduce((sum, hourData) => {
-                        const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
-                        if (issueAssignee !== 'Peter van Diermen' && issueAssignee !== 'Unassigned') {
-                            return sum + hourData.hours;
-                        }
-                        return sum;
-                    }, 0);
-
-                    // Peter's capaciteit is wat overblijft na andere medewerkers
-                    employeeCapacity = Math.max(0, totalSprintCapacity - otherUsedHours);
-                    usedHours = sprintHours.reduce((sum, hourData) => {
-                        const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
-                        if (issueAssignee === 'Peter van Diermen') {
-                            return sum + hourData.hours;
-                        }
-                        return sum;
-                    }, 0);
-                } else if (assignee === 'Unassigned') {
-                    // Voor Unassigned, gebruik de resterende capaciteit na Peter van Diermen
-                    const unassignedCapacity = sprintCapacities.find(
-                        cap => cap.sprint === sprintName && cap.employee === 'Unassigned'
-                    );
-                    
-                    if (!unassignedCapacity) continue;
-
-                    // Bereken totale capaciteit van de sprint
-                    const totalSprintCapacity = sprintCapacities
-                        .filter(cap => cap.sprint === sprintName)
-                        .reduce((sum, cap) => sum + cap.capacity, 0);
-
-                    // Bereken gebruikte uren door andere medewerkers en Peter
-                    const sprintHours = planningResult.sprintHours[sprintName] || [];
-                    const otherUsedHours = sprintHours.reduce((sum, hourData) => {
-                        const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
-                        if (issueAssignee !== 'Unassigned') {
-                            return sum + hourData.hours;
-                        }
-                        return sum;
-                    }, 0);
-
-                    // Unassigned capaciteit is wat overblijft na andere medewerkers en Peter
-                    employeeCapacity = Math.max(0, totalSprintCapacity - otherUsedHours);
-                    usedHours = sprintHours.reduce((sum, hourData) => {
-                        const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
-                        if (issueAssignee === 'Unassigned') {
-                            return sum + hourData.hours;
-                        }
-                        return sum;
-                    }, 0);
-                } else {
-                    // Voor andere medewerkers, gebruik hun normale capaciteit
-                    const sprintCapacity = sprintCapacities.find(
-                        cap => cap.sprint === sprintName && cap.employee === assignee
-                    );
-                    
-                    if (!sprintCapacity) continue;
-
-                    employeeCapacity = sprintCapacity.capacity;
-                    const sprintHours = planningResult.sprintHours[sprintName] || [];
-                    usedHours = sprintHours.reduce((sum, hourData) => sum + hourData.hours, 0);
-                }
+                const employeeCapacity = sprintCapacity.capacity;
+                const sprintHours = planningResult.sprintHours[sprintName] || [];
+                const usedHours = sprintHours.reduce((sum, hourData) => {
+                    const issueAssignee = hourData.issues[0]?.fields?.assignee?.displayName;
+                    if (issueAssignee === assignee) {
+                        return sum + hourData.hours;
+                    }
+                    return sum;
+                }, 0);
 
                 const issueHours = (issue.fields?.timeestimate || 0) / 3600;
+                const hasPredecessors = getPredecessors(issue).length > 0;
 
-                if (issue.key === 'EET-6373' || issue.key === 'EET-6195') {
-                    logger.log(`Sprint ${sprintName}: Capaciteit ${employeeCapacity}, Gebruikt ${usedHours}, Issue uren ${issueHours}`);
+                logger.log(`\nEvaluatie voor issue ${issue.key} in sprint ${sprintName}:`);
+                logger.log(`- Toegewezen aan: ${assignee}`);
+                logger.log(`- Geschatte uren: ${issueHours}`);
+                logger.log(`- Totale sprint capaciteit: ${employeeCapacity}`);
+                logger.log(`- Gebruikte uren in sprint: ${usedHours}`);
+                logger.log(`- Resterende capaciteit: ${employeeCapacity - usedHours}`);
+                logger.log(`- Heeft voorgangers: ${hasPredecessors ? 'Ja' : 'Nee'}`);
+                logger.log(`- Voorgangers: ${hasPredecessors ? getPredecessors(issue).join(', ') : 'Geen'}`);
+
+                // Plan eerst de voorgangers in eerdere sprints
+                if (hasPredecessors) {
+                    await planPredecessors(issue, i);
                 }
 
                 if (usedHours + issueHours <= employeeCapacity) {
                     planIssue(issue, sprintName, assignee);
                     issuePlanned = true;
-                    if (issue.key === 'EET-6373' || issue.key === 'EET-6195') {
-                        logger.log(`Issue ${issue.key} succesvol gepland in sprint ${sprintName}`);
-                    }
+                    logger.log(`Beslissing: Issue ${issue.key} wordt gepland in sprint ${sprintName} omdat:`);
+                    logger.log(`1. ${hasPredecessors ? 'Alle voorgangers zijn gepland in eerdere sprints' : 'Het heeft geen voorgangers'}`);
+                    logger.log(`2. Er is voldoende capaciteit beschikbaar (${usedHours + issueHours} <= ${employeeCapacity})`);
+                    break;
+                } else {
+                    logger.log(`Issue ${issue.key} kan niet worden gepland in sprint ${sprintName} omdat:`);
+                    logger.log(`1. ${hasPredecessors ? 'Niet alle voorgangers zijn gepland in eerdere sprints' : 'Er is onvoldoende capaciteit'}`);
+                    logger.log(`2. Benodigde capaciteit: ${usedHours + issueHours} > ${employeeCapacity}`);
+                }
+            }
+
+            if (!issuePlanned) {
+                planIssue(issue, '10', assignee);
+                logger.log(`\nBeslissing: Issue ${issue.key} wordt gepland in sprint 10 omdat:`);
+                logger.log(`1. Er is geen capaciteit beschikbaar in eerdere sprints`);
+                if (getPredecessors(issue).length > 0) {
+                    logger.log(`2. Het heeft voorgangers die mogelijk nog niet gepland zijn`);
+                }
+            }
+        }
+
+        // Dan issues van Peter van Diermen plannen
+        for (const issue of sortedIssues) {
+            const assignee = issue.fields?.assignee?.displayName;
+            if (!assignee || assignee !== 'Peter van Diermen') continue;
+
+            // Check of het issue al gepland is
+            if (planningResult.plannedIssues.some(pi => pi.issue.key === issue.key)) {
+                logger.log(`Issue ${issue.key} is al gepland`);
+                continue;
+            }
+
+            // Plan het issue in de vroegst mogelijke sprint
+            let issuePlanned = false;
+            for (let i = 0; i < sprintNames.length; i++) {
+                const sprintName = sprintNames[i];
+                
+                // Bereken totale sprint capaciteit
+                const totalSprintCapacity = sprintCapacities.reduce((sum, cap) => {
+                    return sum + cap.capacity;
+                }, 0);
+
+                // Bereken gebruikte uren door alle medewerkers in deze sprint
+                const sprintHours = planningResult.sprintHours[sprintName] || [];
+                const totalUsedHours = sprintHours.reduce((sum, hourData) => {
+                    return sum + hourData.hours;
+                }, 0);
+
+                // Bereken resterende capaciteit voor Peter en Unassigned
+                const remainingCapacity = totalSprintCapacity - totalUsedHours;
+                
+                if (remainingCapacity <= 0) {
+                    logger.log(`Sprint ${sprintName} heeft geen resterende capaciteit (${totalUsedHours}/${totalSprintCapacity} uren gebruikt)`);
+                    continue;
+                }
+
+                const issueHours = (issue.fields?.timeestimate || 0) / 3600;
+                const hasPredecessors = getPredecessors(issue).length > 0;
+                const currentAssignee = issue.fields?.assignee?.displayName || 'Unassigned';
+
+                logger.log(`\nEvaluatie voor issue ${issue.key} in sprint ${sprintName}:`);
+                logger.log(`- Toegewezen aan: ${currentAssignee}`);
+                logger.log(`- Geschatte uren: ${issueHours}`);
+                logger.log(`- Totale sprint capaciteit: ${totalSprintCapacity}`);
+                logger.log(`- Gebruikte uren in sprint: ${totalUsedHours}`);
+                logger.log(`- Resterende capaciteit: ${remainingCapacity}`);
+                logger.log(`- Heeft voorgangers: ${hasPredecessors ? 'Ja' : 'Nee'}`);
+                logger.log(`- Voorgangers: ${hasPredecessors ? getPredecessors(issue).join(', ') : 'Geen'}`);
+
+                if (!hasPredecessors && totalUsedHours + issueHours <= totalSprintCapacity) {
+                    planIssue(issue, sprintName, currentAssignee);
+                    issuePlanned = true;
+                    logger.log(`Beslissing: Issue ${issue.key} wordt gepland in sprint ${sprintName} omdat:`);
+                    logger.log(`1. Het heeft geen voorgangers`);
+                    logger.log(`2. Er is voldoende capaciteit beschikbaar (${totalUsedHours + issueHours} <= ${totalSprintCapacity})`);
+                    
+                    // Plan de opvolgers in de volgende sprint
+                    await planSuccessors(issue, i);
                     break;
                 }
             }
 
             if (!issuePlanned) {
-                // Plaats in sprint 10
                 planIssue(issue, '10', assignee);
-                logger.log(`Issue ${issue.key} komt in sprint 10 vanwege onvoldoende capaciteit`);
+                logger.log(`\nBeslissing: Issue ${issue.key} wordt gepland in sprint 10 omdat:`);
+                logger.log(`1. Er is geen capaciteit beschikbaar in eerdere sprints`);
+                if (getPredecessors(issue).length > 0) {
+                    logger.log(`2. Het heeft voorgangers die mogelijk nog niet gepland zijn`);
+                }
+            }
+        }
+
+        // Tenslotte issues van Unassigned plannen
+        for (const issue of sortedIssues) {
+            const assignee = issue.fields?.assignee?.displayName;
+            if (!assignee || assignee !== 'Unassigned') continue;
+
+            // Check of het issue al gepland is
+            if (planningResult.plannedIssues.some(pi => pi.issue.key === issue.key)) {
+                logger.log(`Issue ${issue.key} is al gepland`);
+                continue;
+            }
+
+            // Plan het issue in de vroegst mogelijke sprint
+            let issuePlanned = false;
+            for (let i = 0; i < sprintNames.length; i++) {
+                const sprintName = sprintNames[i];
+                
+                // Bereken totale sprint capaciteit
+                const totalSprintCapacity = sprintCapacities.reduce((sum, cap) => {
+                    return sum + cap.capacity;
+                }, 0);
+
+                // Bereken gebruikte uren door alle medewerkers in deze sprint
+                const sprintHours = planningResult.sprintHours[sprintName] || [];
+                const totalUsedHours = sprintHours.reduce((sum, hourData) => {
+                    return sum + hourData.hours;
+                }, 0);
+
+                // Bereken resterende capaciteit voor Peter en Unassigned
+                const remainingCapacity = totalSprintCapacity - totalUsedHours;
+                
+                if (remainingCapacity <= 0) {
+                    logger.log(`Sprint ${sprintName} heeft geen resterende capaciteit (${totalUsedHours}/${totalSprintCapacity} uren gebruikt)`);
+                    continue;
+                }
+
+                const issueHours = (issue.fields?.timeestimate || 0) / 3600;
+                const hasPredecessors = getPredecessors(issue).length > 0;
+                const currentAssignee = issue.fields?.assignee?.displayName || 'Unassigned';
+
+                logger.log(`\nEvaluatie voor issue ${issue.key} in sprint ${sprintName}:`);
+                logger.log(`- Toegewezen aan: ${currentAssignee}`);
+                logger.log(`- Geschatte uren: ${issueHours}`);
+                logger.log(`- Totale sprint capaciteit: ${totalSprintCapacity}`);
+                logger.log(`- Gebruikte uren in sprint: ${totalUsedHours}`);
+                logger.log(`- Resterende capaciteit: ${remainingCapacity}`);
+                logger.log(`- Heeft voorgangers: ${hasPredecessors ? 'Ja' : 'Nee'}`);
+                logger.log(`- Voorgangers: ${hasPredecessors ? getPredecessors(issue).join(', ') : 'Geen'}`);
+
+                if (!hasPredecessors && totalUsedHours + issueHours <= totalSprintCapacity) {
+                    planIssue(issue, sprintName, currentAssignee);
+                    issuePlanned = true;
+                    logger.log(`Beslissing: Issue ${issue.key} wordt gepland in sprint ${sprintName} omdat:`);
+                    logger.log(`1. Het heeft geen voorgangers`);
+                    logger.log(`2. Er is voldoende capaciteit beschikbaar (${totalUsedHours + issueHours} <= ${totalSprintCapacity})`);
+                    
+                    // Plan de opvolgers in de volgende sprint
+                    await planSuccessors(issue, i);
+                    break;
+                }
+            }
+
+            if (!issuePlanned) {
+                planIssue(issue, '10', assignee);
+                logger.log(`\nBeslissing: Issue ${issue.key} wordt gepland in sprint 10 omdat:`);
+                logger.log(`1. Er is geen capaciteit beschikbaar in eerdere sprints`);
+                if (getPredecessors(issue).length > 0) {
+                    logger.log(`2. Het heeft voorgangers die mogelijk nog niet gepland zijn`);
+                }
             }
         }
 
@@ -1025,11 +1257,6 @@ async function generateHtml(
                     ${generateIssuesTable(issues, planning, sprintNames)}
                 </div>
             </div>
-            <div class="row">
-                <div class="col">
-                    ${generatePlanningTable(planning, sprintNames)}
-                </div>
-            </div>
         `;
     }
 
@@ -1154,11 +1381,21 @@ function generateSprintHoursTable(projectPlanning: PlanningResult, sprintNames: 
     html += '<thead><tr class="table-dark text-dark"><th>Sprint</th><th>Medewerker</th><th>Beschikbare uren</th><th>Geplande uren</th><th>Geplande issues</th><th>Resterende tijd</th></tr></thead><tbody>';
 
     for (const sprint of availableSprintNames) {
+        let sprintTotalAvailable = 0;
+        let sprintTotalPlanned = 0;
+        let sprintTotalRemaining = 0;
+        let sprintTotalIssues = 0;
+
         for (const [employee, sprintData] of Object.entries(employeeData)) {
             const data = sprintData[sprint];
             if (data) {
                 const plannedIssues = projectPlanning.plannedIssues.filter(pi => pi.sprint === sprint && pi.issue.fields?.assignee?.displayName === employee);
                 
+                sprintTotalAvailable += data.available;
+                sprintTotalPlanned += data.planned;
+                sprintTotalRemaining += data.remaining;
+                sprintTotalIssues += plannedIssues.length;
+
                 html += `
                     <tr>
                         <td>${sprint}</td>
@@ -1171,6 +1408,18 @@ function generateSprintHoursTable(projectPlanning: PlanningResult, sprintNames: 
                 `;
             }
         }
+
+        // Voeg totaalregel toe voor de sprint
+        html += `
+            <tr class="table-dark">
+                <td><strong>${sprint} Totaal</strong></td>
+                <td></td>
+                <td><strong>${sprintTotalAvailable}</strong></td>
+                <td><strong>${sprintTotalPlanned}</strong></td>
+                <td><strong>${sprintTotalIssues}</strong></td>
+                <td><strong>${sprintTotalRemaining}</strong></td>
+            </tr>
+        `;
     }
 
     html += '</tbody></table>';
@@ -1978,95 +2227,66 @@ const styles = `
 `;
 
 function generatePlanningTable(planning: PlanningResult, sprintNames: Map<string, string>): string {
-    return `
-        <div class="row mb-4">
-            <div class="col">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h2 class="mb-0">Planning</h2>
-                    <div class="btn-group">
-                        <a href="/worklogs" class="btn btn-outline-primary">Worklogs</a>
-                        <a href="/planning" class="btn btn-primary">Planning</a>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="row">
-            <div class="col">
-                <div class="table-responsive">
-                    <table class="table table-striped table-bordered">
-                        <thead>
-                            <tr class="table-dark text-dark">
-                                <th>Sprint</th>
-                                <th>Medewerker</th>
-                                <th>Capaciteit</th>
-                                <th>Gebruikt</th>
-                                <th>Beschikbaar</th>
-                                <th>Geplande Issues</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${planning.sprints?.map(sprint => {
-                                // Verzamel alle geplande issues voor deze sprint
-                                const plannedIssues = planning.plannedIssues?.filter(pi => pi.sprint === sprint) || [];
-                                
-                                // Bereken gebruikte uren per medewerker
-                                const employeeHours = new Map<string, number>();
-                                plannedIssues.forEach(issue => {
-                                    const assignee = issue.issue.fields?.assignee?.displayName || 'Niet toegewezen';
-                                    const currentHours = employeeHours.get(assignee) || 0;
-                                    employeeHours.set(assignee, currentHours + issue.hours);
-                                });
-                                
-                                // Bereken totaal voor deze sprint
-                                const sprintTotalHours = Array.from(employeeHours.values()).reduce((sum, hours) => sum + hours, 0);
-                                
-                                // Genereer rijen voor elke medewerker
-                                const employeeRows = Array.from(employeeHours.entries()).map(([employee, usedHours]) => {
-                                    // Zoek de capaciteit voor deze medewerker in deze sprint
-                                    const employeeCapacity = planning.sprintCapacity?.find(
-                                        cap => cap.sprint === sprint && cap.employee === employee
-                                    )?.capacity || 0;
-                                    
-                                    return `
-                                        <tr>
-                                            <td>${sprint}</td>
-                                            <td>${employee}</td>
-                                            <td>${employeeCapacity}</td>
-                                            <td>${usedHours}</td>
-                                            <td>${employeeCapacity - usedHours}</td>
-                                            <td>${plannedIssues
-                                                .filter(pi => pi.issue.fields?.assignee?.displayName === employee)
-                                                .map(pi => `${pi.issue.key} (${pi.hours} uur)`)
-                                                .join('<br>')}</td>
-                                        </tr>
-                                    `;
-                                }).join('');
-                                
-                                // Bereken totaal capaciteit voor deze sprint
-                                const sprintTotalCapacity = planning.sprintCapacity
-                                    ?.filter(cap => cap.sprint === sprint)
-                                    .reduce((sum, cap) => sum + cap.capacity, 0) || 0;
-                                
-                                // Voeg totaalregel toe voor deze sprint
-                                const sprintTotalRow = `
-                                    <tr class="table-info">
-                                        <td><strong>${sprint}</strong></td>
-                                        <td><strong>Totaal</strong></td>
-                                        <td><strong>${sprintTotalCapacity}</strong></td>
-                                        <td><strong>${sprintTotalHours}</strong></td>
-                                        <td><strong>${sprintTotalCapacity - sprintTotalHours}</strong></td>
-                                        <td><strong>${plannedIssues.length} issues</strong></td>
-                                    </tr>
-                                `;
-                                
-                                return employeeRows + sprintTotalRow;
-                            }).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    `;
+    const sprintNamesArray = Array.from(sprintNames.values()).sort((a, b) => {
+        const numA = parseInt(a.replace('Sprint ', ''));
+        const numB = parseInt(b.replace('Sprint ', ''));
+        return numA - numB;
+    });
+
+    let table = '<table class="table table-bordered table-hover">';
+    table += '<thead><tr><th>Sprint</th><th>Capaciteit</th><th>Gebruikte uren</th><th>Beschikbare uren</th><th>Geplande issues</th></tr></thead><tbody>';
+
+    // Groepeer issues per sprint
+    const sprintData = new Map<string, {
+        capacity: number,
+        usedHours: number,
+        plannedIssues: PlannedIssue[]
+    }>();
+
+    sprintNamesArray.forEach(sprint => {
+        sprintData.set(sprint, {
+            capacity: 0,
+            usedHours: 0,
+            plannedIssues: []
+        });
+    });
+
+    // Verwerk alle issues per sprint
+    planning.plannedIssues.forEach(issue => {
+        const sprintInfo = sprintData.get(issue.sprint);
+        if (sprintInfo) {
+            sprintInfo.plannedIssues.push(issue);
+            sprintInfo.usedHours += issue.hours;
+        }
+    });
+
+    // Verwerk capaciteit per sprint
+    planning.sprintCapacity.forEach(capacity => {
+        const sprintInfo = sprintData.get(capacity.sprint);
+        if (sprintInfo) {
+            sprintInfo.capacity += capacity.capacity;
+        }
+    });
+
+    // Genereer rijen voor elke sprint
+    sprintNamesArray.forEach(sprint => {
+        const sprintInfo = sprintData.get(sprint);
+        if (!sprintInfo) return;
+
+        const availableHours = sprintInfo.capacity - sprintInfo.usedHours;
+        const plannedIssuesCount = sprintInfo.plannedIssues.length;
+
+        table += `<tr>
+            <td>${sprint}</td>
+            <td>${sprintInfo.capacity.toFixed(1)}</td>
+            <td>${sprintInfo.usedHours.toFixed(1)}</td>
+            <td>${availableHours.toFixed(1)}</td>
+            <td>${plannedIssuesCount}</td>
+        </tr>`;
+    });
+
+    table += '</tbody></table>';
+    return table;
 }
 
 app.get('/planning', async (req, res) => {
@@ -2282,7 +2502,7 @@ const projects: Project[] = [
 async function loadWorklogs() {
   try {
     const employees = await getGoogleSheetsData('Employees!A1:H');
-    const projectEmployees = employees.map(row => row[0]); // Eerste kolom bevat de medewerkersnamen
+    const projectEmployees = employees.map((row: string[]) => row[0]); // Eerste kolom bevat de medewerkersnamen
 
     // Haal worklogs op voor alle projecten
     const worklogs = await Promise.all(

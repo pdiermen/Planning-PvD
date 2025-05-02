@@ -3,12 +3,14 @@ import type { Issue, IssueLink, WorkLog, WorkLogsResponse, EfficiencyData } from
 import * as dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import logger from './logger';
-import { WorkLogsResponse as OldWorkLogsResponse, EfficiencyTable } from './types';
+import logger from './logger.js';
+import { WorkLogsResponse as OldWorkLogsResponse, EfficiencyTable } from './types.js';
 import { getSprintCapacityFromSheet, ProjectConfig, getProjectConfigsFromSheet, getGoogleSheetsData } from './google-sheets.js';
 import { format } from 'date-fns';
-import { SprintCapacity } from './types';
+import { SprintCapacity } from './types.js';
 import JiraApi from 'jira-client';
+import Table from 'cli-table3';
+import { GoogleSpreadsheet } from 'google-spreadsheet';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -361,7 +363,7 @@ export async function getWorkLogsForProject(
     const maxResults = 100;
 
     // Haal Google Sheets data op om te controleren welke medewerkers actief zijn op dit project
-    const googleSheetsData = await getGoogleSheetsData();
+    const googleSheetsData = await getGoogleSheetsData('Employees!A1:H');
     if (!googleSheetsData) {
         logger.error('Geen Google Sheets data beschikbaar voor project medewerkers filtering');
         return worklogs;
