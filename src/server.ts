@@ -650,7 +650,6 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                 }
                 planningResult.employeeSprintUsedHours[assignee][sprintName] += issueHours;
 
-                logger.log(`Issue ${issueKey} succesvol gepland voor ${assignee} in sprint ${sprintName} met ${issueHours} uur`);
             }
         };
 
@@ -736,30 +735,21 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
             const predecessors = getPredecessors(issue);
             const successors = getSuccessors(issue);
 
-            if (predecessors.length === 0 && successors.length === 0) {
-                // Plan in eerste beschikbare sprint
+            if (predecessors.length === 0) {
+                // Als er geen voorgangers zijn, plan direct in eerste beschikbare sprint
                 const sprintName = findFirstAvailableSprint(issue, assignee);
                 planIssue(issue, sprintName, assignee);
-            } else if (predecessors.length > 0) {
-                // Zoek de laatste sprint van de voorgangers
-                let lastPredecessorSprintIndex = -1;
+            } else {
+                // Als er wel voorgangers zijn, volg de normale voorganger logica
                 for (const predecessorKey of predecessors) {
-                    const predecessor = planningResult.plannedIssues.find(pi => pi.issue.key === predecessorKey);
-                    if (predecessor) {
-                        const sprintIndex = sprintNames.indexOf(predecessor.sprint);
-                        if (sprintIndex > lastPredecessorSprintIndex) {
-                            lastPredecessorSprintIndex = sprintIndex;
+                    const predecessor = issues.find(i => i.key === predecessorKey);
+                    if (predecessor && !planningResult.plannedIssues.some(pi => pi.issue.key === predecessorKey)) {
+                        const predecessorAssignee = predecessor.fields?.assignee?.displayName;
+                        if (predecessorAssignee) {
+                            const sprintName = findFirstAvailableSprint(predecessor, predecessorAssignee);
+                            planIssue(predecessor, sprintName, predecessorAssignee);
                         }
                     }
-                }
-
-                if (lastPredecessorSprintIndex >= 0) {
-                    // Plan in eerste beschikbare sprint na de laatste voorganger
-                    const sprintName = findFirstAvailableSprint(issue, assignee, lastPredecessorSprintIndex + 1);
-                    planIssue(issue, sprintName, assignee);
-                } else {
-                    // Als voorgangers nog niet gepland zijn, plan in sprint 10
-                    planIssue(issue, '10', assignee);
                 }
             }
         }
@@ -778,7 +768,7 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
             const predecessors = getPredecessors(issue);
             const successors = getSuccessors(issue);
 
-            if (predecessors.length === 0 && successors.length === 0) {
+            if (predecessors.length === 0) {
                 // Plan in eerste beschikbare sprint
                 const sprintName = findFirstAvailableSprint(issue, assignee);
                 planIssue(issue, sprintName, assignee);
@@ -829,7 +819,7 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
             const predecessors = getPredecessors(issue);
             const successors = getSuccessors(issue);
 
-            if (predecessors.length === 0 && successors.length === 0) {
+            if (predecessors.length === 0) {
                 // Plan in eerste beschikbare sprint
                 const sprintName = findFirstAvailableSprint(issue, assignee);
                 planIssue(issue, sprintName, assignee);
