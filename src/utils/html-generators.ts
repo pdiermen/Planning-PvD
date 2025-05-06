@@ -30,7 +30,7 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
 
         html += `<tr>
             <td>${sprintName}</td>
-            <td>${hours.toFixed(2)}</td>
+            <td>${hours.toFixed(1)}</td>
             <td>${issueCount}</td>
         </tr>`;
     }
@@ -41,7 +41,7 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
 
 export function generateIssuesTable(issues: Issue[], planning: PlanningResult, sprintNames: Map<string, string>): string {
     let html = '<table class="table table-striped">';
-    html += '<thead><tr><th>Key</th><th>Summary</th><th>Assignee</th><th>Sprint</th><th>Uren</th></tr></thead>';
+    html += '<thead><tr><th>Key</th><th>Summary</th><th>Assignee</th><th>Sprint</th><th>Uren</th><th>Opvolgers</th><th>Status</th></tr></thead>';
     html += '<tbody>';
 
     for (const issue of issues) {
@@ -49,13 +49,50 @@ export function generateIssuesTable(issues: Issue[], planning: PlanningResult, s
         const sprintName = plannedIssue ? sprintNames.get(plannedIssue.sprint) || plannedIssue.sprint : 'Unplanned';
         const hours = (issue.fields?.timeestimate || 0) / 3600;
         const assignee = typeof issue.fields?.assignee === 'object' ? issue.fields.assignee?.displayName : issue.fields?.assignee || 'Unassigned';
+        
+        // Haal opvolgers op via issuelinks
+        const successors = issue.fields?.issuelinks
+            ?.filter(link => 
+                (link.type.name === 'Blocks' || link.type.name === 'Depends On') && 
+                link.outwardIssue?.key === issue.key
+            )
+            .map(link => link.outwardIssue?.key)
+            .filter((key): key is string => key !== undefined) || [];
+
+        const successorIssues = successors.map(key => {
+            const successorIssue = issues.find(i => i.key === key);
+            const successorPlanned = planning.plannedIssues.find(pi => pi.issue.key === key);
+            const successorSprint = successorPlanned ? sprintNames.get(successorPlanned.sprint) || successorPlanned.sprint : 'Unplanned';
+            
+            // Controleer of opvolger in dezelfde sprint staat
+            const sameSprintWarning = successorPlanned && plannedIssue && successorPlanned.sprint === plannedIssue.sprint 
+                ? '<span class="badge bg-warning">Zelfde sprint als voorganger</span>' 
+                : '';
+            
+            return `<div>${key} (${successorSprint}) ${sameSprintWarning}</div>`;
+        }).join('');
+
+        // Bepaal status voor waarschuwingen
+        let statusHtml = '';
+        if (successors.length > 0) {
+            const hasSameSprintSuccessor = successors.some(key => {
+                const successorPlanned = planning.plannedIssues.find(pi => pi.issue.key === key);
+                return successorPlanned && plannedIssue && successorPlanned.sprint === plannedIssue.sprint;
+            });
+            
+            if (hasSameSprintSuccessor) {
+                statusHtml = '<span class="badge bg-warning">Opvolger inzelfde sprint</span>';
+            }
+        }
 
         html += `<tr>
             <td>${issue.key}</td>
             <td>${issue.fields?.summary || ''}</td>
             <td>${assignee}</td>
             <td>${sprintName}</td>
-            <td>${hours.toFixed(2)}</td>
+            <td>${hours.toFixed(1)}</td>
+            <td>${successorIssues || 'Geen'}</td>
+            <td>${statusHtml}</td>
         </tr>`;
     }
 
@@ -116,7 +153,7 @@ export function generatePlanningTable(planning: PlanningResult, sprintNames: Map
                 <td>${sprintName}</td>
                 <td>${assignee}</td>
                 <td>${assignment[0].key} - ${assignment[0].fields?.summary || ''}</td>
-                <td>${(assignment[0].fields?.timeestimate || 0) / 3600}</td>
+                <td>${((assignment[0].fields?.timeestimate || 0) / 3600).toFixed(1)}</td>
             </tr>`;
         }
     }

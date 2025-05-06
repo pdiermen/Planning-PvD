@@ -160,7 +160,7 @@ const getAvailableCapacity = (sprintName: string, assignee: string, planningResu
                 return total + (c.capacity - usedHours);
             }, 0);
         
-        return totalAvailableCapacity;
+        return Math.round(totalAvailableCapacity * 10) / 10;
     }
 
     // Voor andere medewerkers, gebruik hun totale capaciteit
@@ -170,7 +170,7 @@ const getAvailableCapacity = (sprintName: string, assignee: string, planningResu
     if (!capacity) return 0;
 
     // Return de totale capaciteit, niet de beschikbare capaciteit
-    return capacity.capacity;
+    return Math.round(capacity.capacity * 10) / 10;
 };
 
 // Helper functie om de displayName van een assignee te krijgen
@@ -231,6 +231,9 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
             displayHours = (issue.fields?.timeoriginalestimate || 0) / 3600;
         }
         
+        // Rond de weergave uren af op 1 decimaal
+        displayHours = Math.round(displayHours * 10) / 10;
+        
         // Voeg toe aan sprintHours met de weergave uren
         result.sprintHours[sprintName].push({
             issueKey: issue.key,
@@ -265,7 +268,8 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
         if (!result.employeeSprintUsedHours[assignee][sprintName]) {
             result.employeeSprintUsedHours[assignee][sprintName] = 0;
         }
-        result.employeeSprintUsedHours[assignee][sprintName] += hours;
+        // Rond de gebruikte uren af op 1 decimaal
+        result.employeeSprintUsedHours[assignee][sprintName] = Math.round((result.employeeSprintUsedHours[assignee][sprintName] + hours) * 10) / 10;
     };
 
     // Helper functie om de sprint van het parent issue te vinden
