@@ -607,8 +607,8 @@ async function getSprintCapacityFromSheet(googleSheetsData: (string | null)[][])
 
         const projects = projectsStr ? projectsStr.toString().split(',').map(p => p.trim()) : [];
 
-        // Genereer capaciteiten voor elke sprint (nu 10 sprints)
-        for (let sprintNumber = 1; sprintNumber <= 10; sprintNumber++) {
+        // Genereer capaciteiten voor elke sprint (nu 50 sprints)
+        for (let sprintNumber = 1; sprintNumber <= 50; sprintNumber++) {
             if (projects.length === 0 || projects[0] === '') {
                 sprintCapacities.push({
                     employee: employeeName,

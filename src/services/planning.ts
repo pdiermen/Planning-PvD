@@ -143,8 +143,8 @@ export function findFirstAvailableSprint(issue: Issue, assignee: string, startIn
         }
     }
 
-    // Als er geen sprint gevonden is, gebruik sprint 10
-    return '10';
+    // Als er geen sprint gevonden is, gebruik sprint 100
+    return '100';
 }
 
 // Helper functie om beschikbare capaciteit te berekenen

@@ -212,7 +212,7 @@ export async function getSprintCapacity(): Promise<SprintCapacity[]> {
 
         // Maak een lijst van capaciteiten met standaard waarden
         const capacities: SprintCapacity[] = [];
-        const maxSprints = 10;
+        const maxSprints = 50;
 
         // Voeg alle medewerkers toe met hun standaard capaciteit
         Object.entries(defaultCapacities).forEach(([employee, capacity]) => {

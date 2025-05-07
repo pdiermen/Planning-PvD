@@ -204,7 +204,7 @@ export async function getSprintCapacityFromSheet(): Promise<SprintCapacity[]> {
                 const hours = parseFloat(effectiveHours.toString());
                 if (!isNaN(hours)) {
                     // Genereer capaciteiten voor elke sprint
-                    for (let sprintNumber = 1; sprintNumber <= 5; sprintNumber++) {
+                    for (let sprintNumber = 1; sprintNumber <= 50; sprintNumber++) {
                         if (!projects || projects === '') {
                             capacities.push({
                                 employee,
