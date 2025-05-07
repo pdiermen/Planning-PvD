@@ -607,8 +607,8 @@ async function getSprintCapacityFromSheet(googleSheetsData: (string | null)[][])
 
         const projects = projectsStr ? projectsStr.toString().split(',').map(p => p.trim()) : [];
 
-        // Genereer capaciteiten voor elke sprint
-        for (let sprintNumber = 1; sprintNumber <= 5; sprintNumber++) {
+        // Genereer capaciteiten voor elke sprint (nu 10 sprints)
+        for (let sprintNumber = 1; sprintNumber <= 10; sprintNumber++) {
             if (projects.length === 0 || projects[0] === '') {
                 sprintCapacities.push({
                     employee: employeeName,
@@ -803,8 +803,8 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                     const sprintName = findFirstAvailableSprintForIssue(issue, assignee, lastPredecessorSprintIndex + 1);
                     planIssue(issue, sprintName, assignee);
                 } else {
-                    // Als voorgangers nog niet gepland zijn, plan in sprint 10
-                    planIssue(issue, '10', assignee);
+                    // Als voorgangers nog niet gepland zijn, plan in sprint 20
+                    planIssue(issue, '20', assignee);
                 }
             }
         }
@@ -856,8 +856,8 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                     const sprintName = findFirstAvailableSprintForIssue(issue, assignee, lastPredecessorSprintIndex + 1);
                     planIssue(issue, sprintName, assignee);
                 } else {
-                    // Als voorgangers nog niet gepland zijn, plan in sprint 10
-                    planIssue(issue, '10', assignee);
+                    // Als voorgangers nog niet gepland zijn, plan in sprint 20
+                    planIssue(issue, '20', assignee);
                 }
             }
         }
@@ -906,8 +906,8 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
                     const sprintName = findFirstAvailableSprintForIssue(issue, assignee, lastPredecessorSprintIndex + 1);
                     planIssue(issue, sprintName, assignee);
                 } else {
-                    // Als voorgangers nog niet gepland zijn, plan in sprint 10
-                    planIssue(issue, '10', assignee);
+                    // Als voorgangers nog niet gepland zijn, plan in sprint 20
+                    planIssue(issue, '20', assignee);
                 }
             }
         }
