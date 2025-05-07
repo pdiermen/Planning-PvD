@@ -641,8 +641,14 @@ async function calculatePlanning(issues: JiraIssue[], projectType: string, googl
         const sortedIssues = sortIssues(issues);
         
         // Haal de sprint capaciteit op uit Google Sheets
-        const sprintCapacities = await getSprintCapacityFromSheet(googleSheetsData || []);
-        logger.log(`${sprintCapacities.length} sprint capaciteiten gevonden`);
+        const allSprintCapacities = await getSprintCapacityFromSheet(googleSheetsData || []);
+        
+        // Filter de sprint capaciteiten op basis van het project type
+        const sprintCapacities = allSprintCapacities.filter(capacity => 
+            capacity.project === projectType || capacity.project === ''
+        );
+        
+        logger.log(`${sprintCapacities.length} sprint capaciteiten gevonden voor project ${projectType}`);
 
         // Verzamel alle sprint namen en sorteer ze numeriek
         const sprintNames = [...new Set(sprintCapacities.map((value: SprintCapacity) => value.sprint))]
@@ -1117,38 +1123,41 @@ function generateSprintHoursTable(projectPlanning: PlanningResult, sprintNames: 
     const availableSprintNames = Object.keys(projectPlanning.sprintHours).sort((a, b) => parseInt(a) - parseInt(b));
     const employeeData: { [key: string]: { [key: string]: { available: number; planned: number; remaining: number } } } = {};
 
-    // Verwerk sprint capaciteit
+    // Verwerk sprint capaciteit alleen voor actieve medewerkers op het project
     if (projectPlanning.sprintCapacity) {
         for (const capacity of projectPlanning.sprintCapacity) {
-            if (!employeeData[capacity.employee]) {
-                employeeData[capacity.employee] = {};
-            }
-            if (!employeeData[capacity.employee][capacity.sprint]) {
-                employeeData[capacity.employee][capacity.sprint] = {
-                    available: capacity.capacity,
-                    planned: 0,
-                    remaining: capacity.capacity
-                };
+            // Alleen capaciteiten voor het specifieke project meenemen
+            if (capacity.project && capacity.project !== '') {
+                if (!employeeData[capacity.employee]) {
+                    employeeData[capacity.employee] = {};
+                }
+                if (!employeeData[capacity.employee][capacity.sprint]) {
+                    employeeData[capacity.employee][capacity.sprint] = {
+                        available: capacity.capacity,
+                        planned: 0,
+                        remaining: capacity.capacity
+                    };
+                }
             }
         }
     }
 
-    // Verwerk gebruikte uren
+    // Verwerk gebruikte uren alleen voor actieve medewerkers
     if (projectPlanning.employeeSprintUsedHours) {
         for (const [employee, sprintData] of Object.entries(projectPlanning.employeeSprintUsedHours)) {
-            if (!employeeData[employee]) {
-                employeeData[employee] = {};
-            }
-            for (const [sprint, hours] of Object.entries(sprintData)) {
-                if (!employeeData[employee][sprint]) {
-                    employeeData[employee][sprint] = {
-                        available: 0,
-                        planned: hours,
-                        remaining: -hours
-                    };
-                } else {
-                    employeeData[employee][sprint].planned = hours;
-                    employeeData[employee][sprint].remaining = employeeData[employee][sprint].available - hours;
+            // Alleen uren van actieve medewerkers tonen
+            if (employeeData[employee]) {
+                for (const [sprint, hours] of Object.entries(sprintData)) {
+                    if (!employeeData[employee][sprint]) {
+                        employeeData[employee][sprint] = {
+                            available: 0,
+                            planned: hours,
+                            remaining: -hours
+                        };
+                    } else {
+                        employeeData[employee][sprint].planned = hours;
+                        employeeData[employee][sprint].remaining = employeeData[employee][sprint].available - hours;
+                    }
                 }
             }
         }
@@ -1163,10 +1172,14 @@ function generateSprintHoursTable(projectPlanning: PlanningResult, sprintNames: 
         let sprintTotalRemaining = 0;
         let sprintTotalIssues = 0;
 
+        // Alleen actieve medewerkers tonen
         for (const [employee, sprintData] of Object.entries(employeeData)) {
             const data = sprintData[sprint];
             if (data) {
-                const plannedIssues = projectPlanning.plannedIssues.filter(pi => pi.sprint === sprint && getAssigneeName(pi.issue.fields?.assignee) === employee);
+                const plannedIssues = projectPlanning.plannedIssues.filter(pi => 
+                    pi.sprint === sprint && 
+                    getAssigneeName(pi.issue.fields?.assignee) === employee
+                );
                 
                 sprintTotalAvailable += data.available;
                 sprintTotalPlanned += data.planned;
