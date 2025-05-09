@@ -168,22 +168,11 @@ export interface SprintCapacity {
 }
 
 export interface PlanningResult {
-    sprintCapacity: SprintCapacity[];
-    employeeSprintUsedHours: {
-        employee: string;
-        sprintHours: {
-            sprint: string;
-            hours: number;
-            issues: { key: string; hours: number }[];
-        }[];
-    }[];
-    plannedIssues: {
-        issue: Issue;
-        sprint: string;
-        hours: number;
-    }[];
+    sprintHours: { [key: string]: Array<{ issueKey: string; hours: number; issues: Issue[] }> };
+    plannedIssues: PlannedIssue[];
     issues: Issue[];
     sprints: SprintCapacity[];
-    sprintAssignments: Record<string, Record<string, Issue[]>>;
-    sprintHours: Record<string, { issueKey: string; hours: number; issues: Issue[] }[]>;
+    sprintAssignments: { [key: string]: { [key: string]: Issue[] } };
+    sprintCapacity: SprintCapacity[];
+    employeeSprintUsedHours: { [key: string]: { [key: string]: number } };
 } 

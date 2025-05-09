@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Planning dashboard voor PvD",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0 <21.0.0"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
