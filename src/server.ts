@@ -12,7 +12,7 @@ import cors from 'cors';
 import type { WorkLogsResponse } from './types.js';
 import { JIRA_DOMAIN } from './config.js';
 import axios from 'axios';
-import { getProjectConfigsFromSheet, getWorklogConfigsFromSheet } from './google-sheets.js';
+import { getProjectConfigsFromSheet, getWorklogConfigsFromSheet, writePlanningAndIssuesToSheet } from './google-sheets.js';
 import { getGoogleSheetsData } from './google-sheets.js';
 import { getSprintCapacity } from './jira.js';
 import path from 'path';
@@ -990,6 +990,18 @@ async function generateHtml(
     worklogs: Worklog[],
     sprintNames: Map<string, string>
 ): Promise<string> {
+    // Schrijf planning en issues naar Google Sheets voor elk project
+    for (const [projectName, issues] of projectIssues) {
+        const planning = projectPlanning.get(projectName);
+        if (planning) {
+            try {
+                await writePlanningAndIssuesToSheet(projectName, planning, issues);
+            } catch (error) {
+                logger.error(`Error bij schrijven van planning en issues voor project ${projectName} naar Google Sheet: ${error}`);
+            }
+        }
+    }
+
     let html = `
         <!DOCTYPE html>
         <html lang="nl">

@@ -13,7 +13,6 @@ import { calculatePlanning } from '../services/planning.js';
 import { calculateEfficiency } from '../services/efficiency.js';
 import { getSprintNamesFromSheet } from '../services/sprints.js';
 import { loadWorklogs } from '../services/worklogs.js';
-import { generateHtml } from '../utils/html-generators.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

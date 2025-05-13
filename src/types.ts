@@ -155,9 +155,13 @@ export interface ProjectData {
 }
 
 export interface PlannedIssue {
+    issue: Issue;
     sprint: string;
     hours: number;
+    assignee: string;
     key: string;
+    worklogHours?: number;
+    remainingEstimate?: number;
 }
 
 export interface SprintCapacity {

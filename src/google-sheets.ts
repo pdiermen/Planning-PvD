@@ -3,7 +3,7 @@ import * as dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import logger from './logger.js';
-import { SprintCapacity } from './types.js';
+import { SprintCapacity, Issue, PlanningResult } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,7 +27,7 @@ const auth = new google.auth.GoogleAuth({
         client_email: process.env.GOOGLE_SHEETS_CLIENT_EMAIL,
         private_key: process.env.GOOGLE_SHEETS_PRIVATE_KEY?.replace(/\\n/g, '\n'),
     },
-    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
 const sheets = google.sheets({ version: 'v4', auth });
@@ -234,4 +234,331 @@ export async function getSprintCapacityFromSheet(): Promise<SprintCapacity[]> {
         logger.error(`Error bij ophalen van sprint capaciteit uit Google Sheet: ${error.message}`);
         throw error;
     }
+}
+
+export async function writePlanningAndIssuesToSheet(
+    projectName: string,
+    planningData: PlanningResult,
+    issuesData: Issue[]
+): Promise<void> {
+    try {
+        logger.info(`Start schrijven van planning en issues voor project ${projectName} naar Google Sheet...`);
+
+        // Maak de planning tab leeg
+        const planningRange = `Planning ${projectName}!A1`;
+        await sheets.spreadsheets.values.clear({
+            spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+            range: planningRange
+        });
+
+        // Maak de issues tab leeg
+        const issuesRange = `Issues ${projectName}!A1`;
+        await sheets.spreadsheets.values.clear({
+            spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+            range: issuesRange
+        });
+
+        // Genereer huidige datum in Nederlands formaat
+        const currentDate = new Date().toLocaleDateString('nl-NL', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric'
+        });
+
+        // === PLANNING TAB ===
+        // Verzamel alle unieke sprintnummers en medewerkers
+        const allSprints = Object.keys(planningData.sprintHours).sort((a, b) => parseInt(a) - parseInt(b));
+        const allEmployees = Object.keys(planningData.employeeSprintUsedHours).sort();
+
+        // Bouw de planning-rijen per sprint, per medewerker
+        const planningRows: any[] = [];
+        let totalRowIndices: number[] = []; // Bewaar de indices van totaalregels
+        let currentRowIndex = 2; // Start na de header rij
+
+        for (const sprint of allSprints) {
+            let sprintTotalAvailable = 0;
+            let sprintTotalPlanned = 0;
+            let sprintTotalRemaining = 0;
+            let sprintTotalIssues = 0;
+            const employeeRows: any[] = [];
+
+            // Verzamel alle medewerkers die in deze sprint uren hebben
+            const employeesInSprint = allEmployees.filter(emp => planningData.employeeSprintUsedHours[emp][sprint] !== undefined);
+            employeesInSprint.sort();
+
+            for (const employee of employeesInSprint) {
+                const availableHours = planningData.sprintCapacity.find(
+                    (sc) => sc.employee === employee && sc.sprint === sprint
+                )?.capacity || 0;
+                const plannedHours = planningData.employeeSprintUsedHours[employee][sprint] || 0;
+                const plannedIssues = planningData.plannedIssues.filter(
+                    (pi) => pi.assignee === employee && pi.sprint === sprint
+                );
+                const remaining = availableHours - plannedHours;
+
+                sprintTotalAvailable += availableHours;
+                sprintTotalPlanned += plannedHours;
+                sprintTotalRemaining += remaining;
+                sprintTotalIssues += plannedIssues.length;
+
+                employeeRows.push([
+                    parseInt(sprint),
+                    employee,
+                    availableHours,
+                    plannedHours,
+                    plannedIssues.map((pi) => `${pi.issue.key} (${pi.hours.toFixed(1)} uur)`).join(', '),
+                    remaining
+                ]);
+                currentRowIndex++;
+            }
+
+            // Voeg alle medewerkers toe voor deze sprint
+            planningRows.push(...employeeRows);
+            
+            // Voeg totaalregel toe voor deze sprint
+            planningRows.push([
+                parseInt(sprint),
+                'Totaal',
+                sprintTotalAvailable,
+                sprintTotalPlanned,
+                sprintTotalIssues.toString(),
+                sprintTotalRemaining
+            ]);
+            totalRowIndices.push(currentRowIndex);
+            currentRowIndex++;
+        }
+
+        // Bouw de uiteindelijke values-array voor Google Sheets
+        const planningValues = [
+            [`Datum: ${currentDate}`],
+            ['Sprint', 'Medewerker', 'Beschikbare uren', 'Geplande uren', 'Geplande issues', 'Resterende tijd'],
+            ...planningRows
+        ];
+
+        // Schrijf de planning data
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+            range: planningRange,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+                values: planningValues
+            }
+        });
+
+        // === ISSUES TAB ===
+        const issuesValues = [
+            [`Datum: ${currentDate}`],
+            ['Issue', 'Samenvatting', 'Status', 'Prioriteit', 'Toegewezen aan', 'Uren', 'Sprint', 'Opvolgers'],
+            ...issuesData.map((issue) => {
+                const plannedIssue = planningData.plannedIssues.find((pi) => pi.issue.key === issue.key);
+                const sprintName = plannedIssue ? plannedIssue.sprint : 'Niet gepland';
+                const hours = (issue.fields?.timeestimate || 0) / 3600; // Als nummer
+                const successors = issue.fields?.issuelinks
+                    ?.filter((link) => 
+                        (link.type.name === 'Blocks' || link.type.name === 'Depends On') && 
+                        link.outwardIssue?.key === issue.key
+                    )
+                    .map((link) => link.outwardIssue?.key)
+                    .join(', ') || 'Geen';
+
+                return [
+                    issue.key,
+                    issue.fields?.summary || '',
+                    issue.fields?.status?.name || '',
+                    issue.fields?.priority?.name || 'Lowest',
+                    issue.fields?.assignee?.displayName || 'Unassigned',
+                    hours,
+                    sprintName === 'Niet gepland' ? sprintName : parseInt(sprintName), // Sprint als nummer indien mogelijk
+                    successors
+                ];
+            })
+        ];
+
+        await sheets.spreadsheets.values.update({
+            spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+            range: issuesRange,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+                values: issuesValues
+            }
+        });
+
+        // Pas de celformattering toe voor beide tabs
+        const requests = [
+            // Planning tab header
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 1,
+                        endRowIndex: 2,
+                        startColumnIndex: 0,
+                        endColumnIndex: 6
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            },
+            // Planning tab nummerieke kolommen
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 0,
+                        endColumnIndex: 1
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: 'NUMBER', pattern: '0' },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(numberFormat,horizontalAlignment)'
+                }
+            },
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 2,
+                        endColumnIndex: 4
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: 'NUMBER', pattern: '0.0' },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(numberFormat,horizontalAlignment)'
+                }
+            },
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 5,
+                        endColumnIndex: 6
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: 'NUMBER', pattern: '0.0' },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(numberFormat,horizontalAlignment)'
+                }
+            },
+            // Issues tab header
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Issues ${projectName}`),
+                        startRowIndex: 1,
+                        endRowIndex: 2,
+                        startColumnIndex: 0,
+                        endColumnIndex: 8
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            },
+            // Issues tab nummerieke kolommen (Uren en Sprint)
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Issues ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 5,
+                        endColumnIndex: 6
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: 'NUMBER', pattern: '0.0' },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(numberFormat,horizontalAlignment)'
+                }
+            },
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Issues ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 6,
+                        endColumnIndex: 7
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: 'NUMBER', pattern: '0' },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(numberFormat,horizontalAlignment)'
+                }
+            }
+        ];
+
+        // Voeg de totaalregel formattering toe voor de planning tab
+        for (const rowIndex of totalRowIndices) {
+            requests.push({
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: rowIndex,
+                        endRowIndex: rowIndex + 1,
+                        startColumnIndex: 0,
+                        endColumnIndex: 6
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'CENTER'
+                        } as any // Type assertion om de TypeScript error te omzeilen
+                    },
+                    fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)'
+                }
+            });
+        }
+
+        await sheets.spreadsheets.batchUpdate({
+            spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
+            requestBody: {
+                requests
+            }
+        });
+
+        logger.info(`Planning en issues voor project ${projectName} succesvol geschreven naar Google Sheet`);
+    } catch (error) {
+        logger.error(`Error bij schrijven van planning en issues voor project ${projectName} naar Google Sheet: ${error instanceof Error ? error.message : error}`);
+        throw error;
+    }
+}
+
+// Helper functie om het sheet ID op te halen
+async function getSheetId(sheetName: string): Promise<number> {
+    const response = await sheets.spreadsheets.get({
+        spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID
+    });
+    
+    const sheet = response.data.sheets?.find(s => s.properties?.title === sheetName);
+    if (!sheet?.properties?.sheetId) {
+        throw new Error(`Sheet ${sheetName} niet gevonden`);
+    }
+    
+    return sheet.properties.sheetId;
 } 

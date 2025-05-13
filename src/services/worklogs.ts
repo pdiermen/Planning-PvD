@@ -3,7 +3,9 @@ import { getWorkLogs } from '../jira.js';
 
 export async function loadWorklogs(startDate: Date, endDate: Date, projectKey: string): Promise<WorkLog[]> {
     try {
-        const worklogs = await getWorkLogs(startDate, endDate, projectKey);
+        const startDateString = startDate.toISOString().split('T')[0];
+        const endDateString = endDate.toISOString().split('T')[0];
+        const worklogs = await getWorkLogs(projectKey, startDateString, endDateString);
         return worklogs;
     } catch (error) {
         console.error('Error loading worklogs:', error);

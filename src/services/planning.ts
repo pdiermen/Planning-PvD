@@ -30,13 +30,13 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
                 const successorSprintIndex = planning.sprints.findIndex(s => s.sprint === successor.sprint);
                 
                 if (successorSprintIndex <= issueSprintIndex) {
-                    logger.log(`Fout: Opvolger ${successorKey} is gepland in dezelfde of eerdere sprint als ${issue.key}`);
+                    logger.info(`Fout: Opvolger ${successorKey} is gepland in dezelfde of eerdere sprint als ${issue.key}`);
                     // Verplaats de opvolger naar een latere sprint
                     const newSprintIndex = issueSprintIndex + 1;
                     if (newSprintIndex < planning.sprints.length) {
                         const newSprint = planning.sprints[newSprintIndex].sprint;
                         successor.sprint = newSprint;
-                        logger.log(`Opvolger ${successorKey} is verplaatst naar sprint ${newSprint}`);
+                        logger.info(`Opvolger ${successorKey} is verplaatst naar sprint ${newSprint}`);
                         
                         // Update ook de sprintHours
                         const oldSprintHours = planning.sprintHours[successor.sprint];
@@ -57,7 +57,7 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
                         // Als er geen latere sprint beschikbaar is, gebruik de laatste sprint
                         const lastSprint = planning.sprints[planning.sprints.length - 1].sprint;
                         successor.sprint = lastSprint;
-                        logger.log(`Opvolger ${successorKey} is verplaatst naar de laatste sprint ${lastSprint}`);
+                        logger.info(`Opvolger ${successorKey} is verplaatst naar de laatste sprint ${lastSprint}`);
                         
                         // Update ook de sprintHours
                         const oldSprintHours = planning.sprintHours[successor.sprint];
