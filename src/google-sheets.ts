@@ -318,7 +318,7 @@ export async function writePlanningAndIssuesToSheet(
         // Bouw de planning-rijen per sprint, per medewerker
         const planningRows: any[] = [];
         let totalRowIndices: number[] = []; // Bewaar de indices van totaalregels
-        let currentRowIndex = 2; // Start na de header rij
+        let currentRowIndex = 2;
 
         for (const sprint of allSprints) {
             let sprintTotalAvailable = 0;
@@ -391,33 +391,69 @@ export async function writePlanningAndIssuesToSheet(
         });
 
         // === ISSUES TAB ===
+        // Sorteer issues op dezelfde manier als in de browser
+        const sortedIssues = sortIssues(issuesData);
+
         const issuesValues = [
             [`Datum: ${currentDate}`],
-            ['Issue', 'Samenvatting', 'Status', 'Prioriteit', 'Toegewezen aan', 'Uren', 'Sprint', 'Opvolgers'],
-            ...issuesData.map((issue) => {
+            ['Issue', 'Samenvatting', 'Status', 'Prioriteit', 'Toegewezen aan', 'Uren', 'Sprint', 'Voorgangers', 'Opvolgers', 'Due Date'],
+            ...sortedIssues.map((issue) => {
                 const plannedIssue = planningData.plannedIssues.find((pi) => pi.issue.key === issue.key);
                 const sprintName = plannedIssue ? plannedIssue.sprint : 'Niet gepland';
-                const hours = (issue.fields?.timeestimate || 0) / 3600; // Als nummer
-                const successors = issue.fields?.issuelinks
-                    ?.filter((link) => 
-                        (link.type.name === 'Blocks' || link.type.name === 'Depends On') && 
-                        link.outwardIssue?.key === issue.key
-                    )
-                    .map((link) => link.outwardIssue?.key)
-                    .join(', ') || 'Geen';
+                const hours = (issue.fields?.timeestimate || 0) / 3600;
+                
+                // Verzamel voorgangers
+                const predecessors = getPredecessors(issue);
+                const predecessorsText = predecessors.length > 0 
+                    ? predecessors.map(key => {
+                        const plannedPredecessor = planningData.plannedIssues.find(pi => pi.issue.key === key);
+                        const sprintInfo = plannedPredecessor ? ` (Sprint ${plannedPredecessor.sprint})` : '';
+                        return `${key}${sprintInfo}`;
+                    }).join(', ')
+                    : 'Geen';
+
+                // Verzamel opvolgers
+                const successors = getSuccessors(issue);
+                const successorsText = successors.length > 0 
+                    ? successors.map(key => {
+                        const plannedSuccessor = planningData.plannedIssues.find(pi => pi.issue.key === key);
+                        const sprintInfo = plannedSuccessor ? ` (Sprint ${plannedSuccessor.sprint})` : '';
+                        return `${key}${sprintInfo}`;
+                    }).join(', ')
+                    : 'Geen';
+
+                // Format due date
+                const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate).toLocaleDateString('nl-NL') : '-';
 
                 return [
                     issue.key,
                     issue.fields?.summary || '',
                     issue.fields?.status?.name || '',
                     issue.fields?.priority?.name || 'Lowest',
-                    issue.fields?.assignee?.displayName || 'Unassigned',
+                    getAssigneeName(issue.fields?.assignee),
                     hours,
-                    sprintName === 'Niet gepland' ? sprintName : parseInt(sprintName), // Sprint als nummer indien mogelijk
-                    successors
+                    sprintName === 'Niet gepland' ? sprintName : parseInt(sprintName),
+                    predecessorsText,
+                    successorsText,
+                    dueDate
                 ];
             })
         ];
+
+        // Voeg totaalregel toe voor issues
+        const totalHours = issuesData.reduce((sum, issue) => sum + (issue.fields?.timeestimate || 0), 0) / 3600;
+        issuesValues.push([
+            'Totaal',
+            '',
+            '',
+            '',
+            '',
+            totalHours.toFixed(1),
+            '',
+            '',
+            '',
+            ''
+        ]);
 
         await sheets.spreadsheets.values.update({
             spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
@@ -430,7 +466,7 @@ export async function writePlanningAndIssuesToSheet(
 
         // Pas de celformattering toe voor beide tabs
         const requests = [
-            // Planning tab header
+            // Planning tab header - alleen numerieke kolommen centreren
             {
                 repeatCell: {
                     range: {
@@ -438,6 +474,24 @@ export async function writePlanningAndIssuesToSheet(
                         startRowIndex: 1,
                         endRowIndex: 2,
                         startColumnIndex: 0,
+                        endColumnIndex: 1
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            },
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 1,
+                        endRowIndex: 2,
+                        startColumnIndex: 2,
                         endColumnIndex: 6
                     },
                     cell: {
@@ -449,7 +503,76 @@ export async function writePlanningAndIssuesToSheet(
                     fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
                 }
             },
-            // Planning tab nummerieke kolommen
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 1,
+                        endRowIndex: 2,
+                        startColumnIndex: 1,
+                        endColumnIndex: 2
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            },
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 1,
+                        endRowIndex: 2,
+                        startColumnIndex: 4,
+                        endColumnIndex: 5
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            },
+            // Planning tab tekst kolommen (links uitlijnen)
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 1,
+                        endColumnIndex: 2
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(horizontalAlignment)'
+                }
+            },
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 4,
+                        endColumnIndex: 5
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(horizontalAlignment)'
+                }
+            },
+            // Planning tab nummerieke kolommen (centreren)
             {
                 repeatCell: {
                     range: {
@@ -501,15 +624,15 @@ export async function writePlanningAndIssuesToSheet(
                     fields: 'userEnteredFormat(numberFormat,horizontalAlignment)'
                 }
             },
-            // Issues tab header
+            // Issues tab header - alleen numerieke kolommen centreren
             {
                 repeatCell: {
                     range: {
                         sheetId: await getSheetId(`Issues ${projectName}`),
                         startRowIndex: 1,
                         endRowIndex: 2,
-                        startColumnIndex: 0,
-                        endColumnIndex: 8
+                        startColumnIndex: 5,
+                        endColumnIndex: 7
                     },
                     cell: {
                         userEnteredFormat: {
@@ -520,14 +643,83 @@ export async function writePlanningAndIssuesToSheet(
                     fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
                 }
             },
-            // Issues tab nummerieke kolommen (Uren en Sprint)
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Issues ${projectName}`),
+                        startRowIndex: 1,
+                        endRowIndex: 2,
+                        startColumnIndex: 0,
+                        endColumnIndex: 5
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            },
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Issues ${projectName}`),
+                        startRowIndex: 1,
+                        endRowIndex: 2,
+                        startColumnIndex: 7,
+                        endColumnIndex: 10
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            },
+            // Issues tab tekst kolommen (links uitlijnen)
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Issues ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 0,
+                        endColumnIndex: 5
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(horizontalAlignment)'
+                }
+            },
+            {
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Issues ${projectName}`),
+                        startRowIndex: 2,
+                        startColumnIndex: 7,
+                        endColumnIndex: 10
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(horizontalAlignment)'
+                }
+            },
+            // Issues tab nummerieke kolommen (centreren)
             {
                 repeatCell: {
                     range: {
                         sheetId: await getSheetId(`Issues ${projectName}`),
                         startRowIndex: 2,
                         startColumnIndex: 5,
-                        endColumnIndex: 6
+                        endColumnIndex: 7
                     },
                     cell: {
                         userEnteredFormat: {
@@ -537,27 +729,10 @@ export async function writePlanningAndIssuesToSheet(
                     },
                     fields: 'userEnteredFormat(numberFormat,horizontalAlignment)'
                 }
-            },
-            {
-                repeatCell: {
-                    range: {
-                        sheetId: await getSheetId(`Issues ${projectName}`),
-                        startRowIndex: 2,
-                        startColumnIndex: 6,
-                        endColumnIndex: 7
-                    },
-                    cell: {
-                        userEnteredFormat: {
-                            numberFormat: { type: 'NUMBER', pattern: '0' },
-                            horizontalAlignment: 'CENTER'
-                        }
-                    },
-                    fields: 'userEnteredFormat(numberFormat,horizontalAlignment)'
-                }
             }
         ];
 
-        // Voeg de totaalregel formattering toe voor de planning tab
+        // Voeg de totaalregel formattering toe voor beide tabs
         for (const rowIndex of totalRowIndices) {
             requests.push({
                 repeatCell: {
@@ -566,19 +741,128 @@ export async function writePlanningAndIssuesToSheet(
                         startRowIndex: rowIndex,
                         endRowIndex: rowIndex + 1,
                         startColumnIndex: 0,
+                        endColumnIndex: 1
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'CENTER'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            });
+            requests.push({
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: rowIndex,
+                        endRowIndex: rowIndex + 1,
+                        startColumnIndex: 2,
                         endColumnIndex: 6
                     },
                     cell: {
                         userEnteredFormat: {
-                            backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 },
                             textFormat: { bold: true },
                             horizontalAlignment: 'CENTER'
-                        } as any // Type assertion om de TypeScript error te omzeilen
+                        }
                     },
-                    fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)'
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            });
+            requests.push({
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: rowIndex,
+                        endRowIndex: rowIndex + 1,
+                        startColumnIndex: 1,
+                        endColumnIndex: 2
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+                }
+            });
+            requests.push({
+                repeatCell: {
+                    range: {
+                        sheetId: await getSheetId(`Planning ${projectName}`),
+                        startRowIndex: rowIndex,
+                        endRowIndex: rowIndex + 1,
+                        startColumnIndex: 4,
+                        endColumnIndex: 5
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            textFormat: { bold: true },
+                            horizontalAlignment: 'LEFT'
+                        }
+                    },
+                    fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
                 }
             });
         }
+
+        // Voeg totaalregel formattering toe voor issues tab
+        requests.push({
+            repeatCell: {
+                range: {
+                    sheetId: await getSheetId(`Issues ${projectName}`),
+                    startRowIndex: issuesValues.length - 1,
+                    endRowIndex: issuesValues.length,
+                    startColumnIndex: 5,
+                    endColumnIndex: 7
+                },
+                cell: {
+                    userEnteredFormat: {
+                        textFormat: { bold: true },
+                        horizontalAlignment: 'CENTER'
+                    }
+                },
+                fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+            }
+        });
+        requests.push({
+            repeatCell: {
+                range: {
+                    sheetId: await getSheetId(`Issues ${projectName}`),
+                    startRowIndex: issuesValues.length - 1,
+                    endRowIndex: issuesValues.length,
+                    startColumnIndex: 0,
+                    endColumnIndex: 5
+                },
+                cell: {
+                    userEnteredFormat: {
+                        textFormat: { bold: true },
+                        horizontalAlignment: 'LEFT'
+                    }
+                },
+                fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+            }
+        });
+        requests.push({
+            repeatCell: {
+                range: {
+                    sheetId: await getSheetId(`Issues ${projectName}`),
+                    startRowIndex: issuesValues.length - 1,
+                    endRowIndex: issuesValues.length,
+                    startColumnIndex: 7,
+                    endColumnIndex: 10
+                },
+                cell: {
+                    userEnteredFormat: {
+                        textFormat: { bold: true },
+                        horizontalAlignment: 'LEFT'
+                    }
+                },
+                fields: 'userEnteredFormat(textFormat,horizontalAlignment)'
+            }
+        });
 
         await sheets.spreadsheets.batchUpdate({
             spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
@@ -606,6 +890,51 @@ async function getSheetId(sheetName: string): Promise<number> {
     }
     
     return sheet.properties.sheetId;
+}
+
+// Helper functies voor het verwerken van issues
+function sortIssues(issues: Issue[]): Issue[] {
+    return [...issues].sort((a, b) => {
+        // Eerst op sprint nummer
+        const sprintA = Number(a.fields?.customfield_10020) || 0;
+        const sprintB = Number(b.fields?.customfield_10020) || 0;
+        if (sprintA !== sprintB) return sprintA - sprintB;
+
+        // Dan op prioriteit
+        const priorityA = a.fields?.priority?.name || 'Lowest';
+        const priorityB = b.fields?.priority?.name || 'Lowest';
+        if (priorityA !== priorityB) return priorityA.localeCompare(priorityB);
+
+        // Tenslotte op issue key
+        return a.key.localeCompare(b.key);
+    });
+}
+
+function getPredecessors(issue: Issue): string[] {
+    return issue.fields?.issuelinks
+        ?.filter(link => 
+            link.type.name === 'Predecessor' && 
+            link.type.outward === 'has as a predecessor' &&
+            link.outwardIssue?.key &&
+            link.outwardIssue.fields?.status?.name !== 'Closed'
+        )
+        .map(link => link.outwardIssue!.key) || [];
+}
+
+function getSuccessors(issue: Issue): string[] {
+    return issue.fields?.issuelinks
+        ?.filter(link => 
+            link.type.name === 'Predecessor' && 
+            link.type.inward === 'is a predecessor of' &&
+            link.inwardIssue?.key &&
+            link.inwardIssue.fields?.status?.name !== 'Closed'
+        )
+        .map(link => link.inwardIssue!.key) || [];
+}
+
+function getAssigneeName(assignee: any): string {
+    if (!assignee) return 'Unassigned';
+    return assignee.displayName || 'Unassigned';
 }
 
 // Error handling voor Google Sheets API
