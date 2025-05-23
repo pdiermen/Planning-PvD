@@ -2,6 +2,7 @@ import type { Issue as JiraIssue, Issue, SprintCapacity, PlanningResult, Planned
 import { getSprintCapacityFromSheet } from './sprints.js';
 import logger from '../logger.js';
 import { getSuccessors, getPredecessors } from '../utils/jira-helpers.js';
+import { getAssigneeName } from '../utils/shared-functions.js';
 
 // Status volgorde voor sortering
 const STATUS_ORDER: Record<string, number> = {
@@ -333,13 +334,6 @@ const getAvailableCapacity = (sprintName: string, assignee: string, planningResu
 
     return Math.round((capacity.capacity - usedHours) * 10) / 10;
 };
-
-// Helper functie om de displayName van een assignee te krijgen
-function getAssigneeName(assignee: { displayName: string; } | string | undefined): string {
-    if (!assignee) return 'Unassigned';
-    if (typeof assignee === 'string') return assignee;
-    return assignee.displayName;
-}
 
 // Helper functie om alle opvolgers in de keten te vinden
 const getAllSuccessorsInChain = (issue: Issue, allIssues: Issue[]): Set<string> => {
@@ -676,9 +670,7 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
     // Loop door de gesorteerde issues en plan ze
     for (let i = 0; i < sortedIssues.length; i++) {
         const issue = sortedIssues[i];
-        const assignee = typeof issue.fields?.assignee === 'object' ? 
-            issue.fields.assignee.displayName : 
-            'Unassigned';
+        const assignee = getAssigneeName(issue.fields?.assignee);
         
         // Vind de eerste beschikbare sprint
         const sprintName = findFirstAvailableSprint(issue, result, 0);
