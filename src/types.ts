@@ -136,11 +136,12 @@ export interface WorkLogsResponse {
 }
 
 export interface ProjectConfig {
-    projectName: string;
-    projectCodes: string[];
+    project: string;
+    codes: string[];
     jqlFilter: string;
     worklogName: string;
     worklogJql: string;
+    sprintStartDate: Date | null;
 }
 
 export interface WorklogConfig {
@@ -167,18 +168,21 @@ export interface PlannedIssue {
 }
 
 export interface SprintCapacity {
-    employee: string;
     sprint: string;
+    employee: string;
     capacity: number;
-    project?: string;
+    project: string;
+    availableCapacity: number;
 }
 
 export interface PlanningResult {
-    sprintHours: { [key: string]: { [key: string]: number } };
+    sprintHours: Record<string, Record<string, number>>;
     plannedIssues: PlannedIssue[];
     issues: Issue[];
     sprints: SprintCapacity[];
-    sprintAssignments: { [key: string]: { [key: string]: Issue[] } };
+    sprintAssignments: Record<string, Record<string, Issue[]>>;
     sprintCapacity: SprintCapacity[];
-    employeeSprintUsedHours: { [key: string]: { [key: string]: number } };
+    employeeSprintUsedHours: Record<string, Record<string, number>>;
+    currentSprint: string;
+    capacityFactor: number;
 } 

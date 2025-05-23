@@ -11,7 +11,6 @@ import axios from 'axios';
 import { getProjectConfigsFromSheet, getWorklogConfigsFromSheet } from '../services/google-sheets.js';
 import { calculatePlanning } from '../services/planning.js';
 import { calculateEfficiency } from '../services/efficiency.js';
-import { getSprintNamesFromSheet } from '../services/sprints.js';
 import { loadWorklogs } from '../services/worklogs.js';
 
 const __filename = fileURLToPath(import.meta.url);

@@ -83,7 +83,7 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
     }
 
     let html = '<table class="table table-striped table-bordered">';
-    html += '<thead><tr class="table-dark text-dark"><th>Sprint</th><th>Medewerker</th><th>Beschikbare uren</th><th>Geplande uren</th><th>Geplande issues</th><th>Resterende tijd</th></tr></thead><tbody>';
+    html += '<thead><tr class="table-dark text-dark"><th>Sprint</th><th>Medewerker</th><th>Effectieve uren</th><th>Geplande uren</th><th>Geplande issues</th><th>Resterende tijd</th></tr></thead><tbody>';
 
     for (const sprint of availableSprintNames) {
         let sprintTotalAvailable = 0;

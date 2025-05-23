@@ -1,8 +1,9 @@
 import type { Issue as JiraIssue, Issue, SprintCapacity, PlanningResult, PlannedIssue, IssueLink, EfficiencyData, ProjectConfig, WorklogConfig, WorkLog } from '../types.js';
-import { getSprintCapacityFromSheet } from './sprints.js';
+import { getSprintCapacityFromSheet } from '../google-sheets.js';
 import logger from '../logger.js';
 import { getSuccessors, getPredecessors } from '../utils/jira-helpers.js';
 import { getAssigneeName } from '../utils/shared-functions.js';
+import { getProjectConfigsFromSheet } from '../google-sheets.js';
 
 // Status volgorde voor sortering
 const STATUS_ORDER: Record<string, number> = {
@@ -524,6 +525,27 @@ const compareDueDates = (a: Issue, b: Issue): number => {
     return 0;
 };
 
+// Helper functie om te controleren of een datum een werkdag is (ma-vr)
+function isWorkDay(date: Date): boolean {
+    const day = date.getDay();
+    return day !== 0 && day !== 6; // 0 = zondag, 6 = zaterdag
+}
+
+// Helper functie om het aantal werkdagen tussen twee datums te berekenen
+function getWorkDaysBetween(startDate: Date, endDate: Date): number {
+    let workDays = 0;
+    const currentDate = new Date(startDate);
+    
+    while (currentDate <= endDate) {
+        if (isWorkDay(currentDate)) {
+            workDays++;
+        }
+        currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    return workDays;
+}
+
 export async function calculatePlanning(issues: Issue[], projectType: string, googleSheetsData: (string | null)[][] | null): Promise<PlanningResult> {
     // Verzamel sprint capaciteiten uit Google Sheets
     const sprintCapacities = await getSprintCapacityFromSheet(googleSheetsData);
@@ -537,16 +559,64 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
         // Filter op basis van het project type
         return capacity.project === projectType;
     });
+
+    // Bepaal huidige sprint en capaciteitsfactor
+    const projectConfigs = await getProjectConfigsFromSheet(googleSheetsData);
+    const projectConfig = projectConfigs.find((config: ProjectConfig) => config.project === projectType);
+    
+    let currentSprint = '1';
+    let capacityFactor = 1;
+
+    if (projectConfig?.sprintStartDate) {
+        const sprintStartDate = projectConfig.sprintStartDate;
+        const currentDate = new Date();
+        const sprintDuration = 14; // 2 weken in dagen
+        const workDaysPerSprint = 10; // 2 weken = 10 werkdagen
+
+        // Bereken hoeveel sprints er zijn verstreken sinds de startdatum
+        const totalDaysSinceStart = Math.floor((currentDate.getTime() - sprintStartDate.getTime()) / (1000 * 60 * 60 * 24));
+        const completedSprints = Math.floor(totalDaysSinceStart / sprintDuration);
+
+        // Bepaal startdatum van huidige sprint
+        const currentSprintStartDate = new Date(sprintStartDate);
+        currentSprintStartDate.setDate(sprintStartDate.getDate() + (completedSprints * sprintDuration));
+
+        // Bepaal hoeveel werkdagen er nog over zijn in huidige sprint
+        const workDaysInCurrentSprint = getWorkDaysBetween(currentSprintStartDate, currentDate);
+        const remainingWorkDaysInSprint = workDaysPerSprint - workDaysInCurrentSprint;
+
+        // Bereken evenredig deel van capaciteit voor huidige sprint
+        capacityFactor = remainingWorkDaysInSprint / workDaysPerSprint;
+        currentSprint = (completedSprints + 1).toString();
+
+        logger.info(`\nSprint berekeningen:`);
+        logger.info(`- Sprint startdatum: ${sprintStartDate.toISOString()}`);
+        logger.info(`- Huidige datum: ${currentDate.toISOString()}`);
+        logger.info(`- Huidige sprint: ${currentSprint}`);
+        logger.info(`- Werkdagen in huidige sprint: ${workDaysInCurrentSprint}`);
+        logger.info(`- Resterende werkdagen: ${remainingWorkDaysInSprint}`);
+        logger.info(`- Capaciteitsfactor: ${capacityFactor.toFixed(2)}`);
+    }
+
+    // Pas de capaciteiten aan voor de huidige sprint
+    const adjustedSprintCapacities = filteredSprintCapacities.map(capacity => ({
+        ...capacity,
+        availableCapacity: capacity.sprint === currentSprint 
+            ? Math.round(capacity.capacity * capacityFactor * 10) / 10 
+            : capacity.capacity
+    }));
     
     // Initialiseer het resultaat met de juiste structuur
     const result: PlanningResult = {
         sprintHours: {},
         plannedIssues: [],
         issues: issues,
-        sprints: filteredSprintCapacities,
+        sprints: adjustedSprintCapacities,
         sprintAssignments: {},
-        sprintCapacity: filteredSprintCapacities,
-        employeeSprintUsedHours: {}
+        sprintCapacity: adjustedSprintCapacities,
+        employeeSprintUsedHours: {},
+        currentSprint,
+        capacityFactor
     };
 
     // Helper functie om te controleren of een issue een opvolger heeft

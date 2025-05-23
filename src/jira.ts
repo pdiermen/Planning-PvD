@@ -223,7 +223,8 @@ export async function getSprintCapacity(): Promise<SprintCapacity[]> {
                     employee,
                     sprint: i.toString(),
                     capacity: sheetCapacity?.capacity || capacity,
-                    project: ''
+                    project: '',
+                    availableCapacity: sheetCapacity?.capacity || capacity
                 });
             }
         });
@@ -287,7 +288,7 @@ export async function getPlanning(): Promise<PlanningResult> {
 }
 
 function constructJqlQuery(projectConfig: ProjectConfig, startDate?: string, endDate?: string): string {
-    const projectFilter = projectConfig.projectCodes.map(code => `project = ${code}`).join(' OR ');
+    const projectFilter = projectConfig.codes.map(code => `project = ${code}`).join(' OR ');
     let jql = `(${projectFilter}) AND status != Done`;
     
     if (startDate && endDate) {
@@ -303,7 +304,7 @@ function constructJqlQuery(projectConfig: ProjectConfig, startDate?: string, end
 
 export async function getIssuesForProject(projectConfig: ProjectConfig, startDate?: string, endDate?: string): Promise<Issue[]> {
     try {
-        logger.info({ message: `Start ophalen van issues voor project ${projectConfig.projectName}...` });
+        logger.info({ message: `Start ophalen van issues voor project ${projectConfig.project}...` });
         
         const jql = constructJqlQuery(projectConfig, startDate, endDate);
         logger.info({ message: `JQL query: ${jql}` });
@@ -313,7 +314,7 @@ export async function getIssuesForProject(projectConfig: ProjectConfig, startDat
         const maxResults = 100;
 
         logger.info('\n=== DEBUG: START OPHALEN ISSUES ===');
-        logger.info(`Project: ${projectConfig.projectName}`);
+        logger.info(`Project: ${projectConfig.project}`);
         logger.info(`JQL query: ${jql}`);
         logger.info(`Max results per batch: ${maxResults}`);
 
@@ -349,17 +350,17 @@ export async function getIssuesForProject(projectConfig: ProjectConfig, startDat
         }
 
     
-        logger.info(`\nTotaal ${issues.length} issues opgehaald voor project ${projectConfig.projectName}`);
+        logger.info(`\nTotaal ${issues.length} issues opgehaald voor project ${projectConfig.project}`);
         logger.info('=== EINDE OPHALEN ISSUES ===\n');
 
-        logger.info({ message: `Totaal ${issues.length} issues gevonden voor project ${projectConfig.projectName}` });
+        logger.info({ message: `Totaal ${issues.length} issues gevonden voor project ${projectConfig.project}` });
         return issues;
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        logger.error(`\nFOUT bij ophalen issues voor project ${projectConfig.projectName}:`);
+        logger.error(`\nFOUT bij ophalen issues voor project ${projectConfig.project}:`);
         logger.error(errorMessage);
         logger.error('=== EINDE FOUTMELDING ===\n');
-        logger.error({ message: `Error bij ophalen van issues voor project ${projectConfig.projectName}: ${errorMessage}` });
+        logger.error({ message: `Error bij ophalen van issues voor project ${projectConfig.project}: ${errorMessage}` });
         throw error;
     }
 }
@@ -372,7 +373,6 @@ interface JiraWorkLog {
 }
 
 export async function getWorkLogsForProject(
-    projectCodes: string[],
     startDate: Date,
     endDate: Date,
     config: ProjectConfig
@@ -388,10 +388,10 @@ export async function getWorkLogsForProject(
         return worklogs;
     }
 
-    // Haal de kolom indices op
+    // Haal de kolom indices op basis van de kolomnamen
     const headerRow = googleSheetsData[0];
-    const nameIndex = headerRow.indexOf('Naam');
-    const projectIndex = headerRow.indexOf('Project');
+    const nameIndex = headerRow.findIndex(header => header?.toLowerCase() === 'naam');
+    const projectIndex = headerRow.findIndex(header => header?.toLowerCase() === 'project');
 
     if (nameIndex === -1 || projectIndex === -1) {
         logger.error('Verplichte kolommen niet gevonden in Google Sheets data');
@@ -405,16 +405,16 @@ export async function getWorkLogsForProject(
         const employeeName = row[nameIndex];
         const projects = (row[projectIndex] || '').split(',').map((p: string) => p.trim());
         
-        if (employeeName && projects.includes(config.projectName)) {
+        if (employeeName && projects.includes(config.project)) {
             projectEmployees.add(employeeName);
         }
     }
 
-    logger.info(`Medewerkers actief op project ${config.projectName}: ${Array.from(projectEmployees).join(', ')}`);
+    logger.info(`Medewerkers actief op project ${config.project}: ${Array.from(projectEmployees).join(', ')}`);
 
     while (true) {
         // Bouw basis JQL query met alleen project filter
-        let jql = `project in (${projectCodes.join(',')})`;
+        let jql = `project in (${config.codes.join(',')})`;
 
         // Voeg worklog JQL filter toe als deze bestaat
         if (config.worklogJql && config.worklogJql.trim() !== '') {
@@ -444,8 +444,8 @@ export async function getWorkLogsForProject(
         for (const issue of issues) {
             try {
                 // Controleer of het issue bij het juiste project hoort
-                if (!projectCodes.includes(issue.fields.project.key)) {
-                    logger.info(`Issue ${issue.key} hoort niet bij project ${projectCodes.join(',')}, wordt overgeslagen`);
+                if (!config.codes.includes(issue.fields.project.key)) {
+                    logger.info(`Issue ${issue.key} hoort niet bij project ${config.codes.join(',')}, wordt overgeslagen`);
                     continue;
                 }
 
@@ -498,18 +498,13 @@ export async function getWorkLogsForProject(
             }
         }
 
-        // Controleer of er meer resultaten zijn
-        const hasMore = startAt + maxResults < response.data.total;
-        if (hasMore) {
-            startAt += maxResults;
-            logger.info(`Er zijn meer resultaten beschikbaar. Volgende batch start bij ${startAt}`);
-        } else {
-            logger.info(`Alle resultaten opgehaald (totaal: ${response.data.total}).`);
+        if (startAt + maxResults >= response.data.total) {
             break;
         }
+
+        startAt += maxResults;
     }
 
-    logger.info(`Totaal aantal worklogs gevonden voor project ${config.projectName}: ${worklogs.length}`);
     return worklogs;
 }
 

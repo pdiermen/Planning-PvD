@@ -91,7 +91,7 @@ app.get('/progress', (req, res) => {
     res.write('data: {"step": 0}\n\n');
 });
 
-function calculateExpectedHours(startDate: string, endDate: string, availableHoursPerWeek: number, employeeName: string): number {
+function calculateExpectedHours(startDate: string, endDate: string, effectiveHoursPerWeek: number, employeeName: string): number {
     const start = new Date(startDate);
     const end = new Date(endDate);
     let totalDays = 0;
@@ -107,11 +107,11 @@ function calculateExpectedHours(startDate: string, endDate: string, availableHou
         currentDate.setDate(currentDate.getDate() + 1);
     }
 
-    // Bereken beschikbare uren per dag door de beschikbare uren per week te delen door 5
-    const availableHoursPerDay = availableHoursPerWeek / 5;
+    // Bereken effectieve uren per dag door de effectieve uren per week te delen door 5
+    const effectiveHoursPerDay = effectiveHoursPerWeek / 5;
     
-    // Bereken verwachte uren door beschikbare uren per dag te vermenigvuldigen met aantal dagen
-    const expectedHours = Number((totalDays * availableHoursPerDay).toFixed(1));
+    // Bereken verwachte uren door effectieve uren per dag te vermenigvuldigen met aantal dagen
+    const expectedHours = Number((totalDays * effectiveHoursPerDay).toFixed(1));
 
     return expectedHours;
 }
@@ -128,13 +128,14 @@ async function calculateEfficiency(issues: JiraIssue[], worklogs: WorkLog[], sta
     logger.info('Start calculateEfficiency functie');
     
     // Haal project configuraties op uit Google Sheet
-    const projectConfigs = await getProjectConfigsFromSheet();
+    const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
+    const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
     
     // Verzamel alle unieke projectcodes
     const projectCodes = new Set<string>();
     projectConfigs.forEach(config => {
-        if (config.projectCodes && Array.isArray(config.projectCodes)) {
-            config.projectCodes.forEach(code => {
+        if (config.codes && Array.isArray(config.codes)) {
+            config.codes.forEach(code => {
                 if (typeof code === 'string') {
                     projectCodes.add(code.trim());
                 }
@@ -320,28 +321,47 @@ app.get('/worklogs', (req, res) => {
 
 app.get('/', async (req, res) => {
     try {
+        // Haal eerst project configuraties op
+        let projectSheetsData;
+        try {
+            projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
+        } catch (error) {
+            console.error('Error bij ophalen van project configuraties:', error);
+            throw error;
+        }
+
         // Haal project configuraties op
-        const projectConfigs = await getProjectConfigsFromSheet();
+        const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
+        
+        // Haal employee data op
+        let employeeSheetsData;
+        try {
+            employeeSheetsData = await getGoogleSheetsData('Employees!A1:H');
+            if (employeeSheetsData) {
+                const headerRow = employeeSheetsData[0];
+                const nameIndex = headerRow.findIndex(header => header?.toLowerCase() === 'naam');
+                const effectiveHoursIndex = headerRow.findIndex(header => header?.toLowerCase() === 'effectieve uren');
+                const projectIndex = headerRow.findIndex(header => header?.toLowerCase() === 'project');
+
+                if (nameIndex === -1 || effectiveHoursIndex === -1 || projectIndex === -1) {
+                    throw new Error('Verplichte kolommen niet gevonden in Employees sheet');
+                }
+            }
+        } catch (error) {
+            console.error('Error bij ophalen van employee data:', error);
+            throw error;
+        }
         
         // Haal issues op voor elk project
         const projectIssues = new Map<string, JiraIssue[]>();
         for (const config of projectConfigs) {
             try {
                 const issues = await getIssuesForProject(config);
-                projectIssues.set(config.projectName, issues);
+                projectIssues.set(config.project, issues);
             } catch (error) {
-                console.error(`Error bij ophalen issues voor project ${config.projectName}:`, error);
-                projectIssues.set(config.projectName, []);
+                console.error(`Error bij ophalen issues voor project ${config.project}:`, error);
+                projectIssues.set(config.project, []);
             }
-        }
-
-        // Haal Google Sheets data op
-        let googleSheetsData;
-        try {
-            googleSheetsData = await getGoogleSheetsData('Employees!A1:H');
-        } catch (error) {
-            console.error('Error bij ophalen van Google Sheets data:', error);
-            throw error;
         }
 
         // Haal sprint namen op voor alle issues
@@ -357,13 +377,13 @@ app.get('/', async (req, res) => {
         // Bereken planning voor elk project
         const projectPlanning = new Map<string, PlanningResult>();
         for (const config of projectConfigs) {
-            const issues = projectIssues.get(config.projectName) || [];
-            const planning = await calculatePlanning(issues, config.projectName, googleSheetsData || []);
-            projectPlanning.set(config.projectName, planning);
+            const issues = projectIssues.get(config.project) || [];
+            const planning = await calculatePlanning(issues, config.project, employeeSheetsData || []);
+            projectPlanning.set(config.project, planning);
         }
 
         // Genereer HTML
-        const html = await generateHtml(projectIssues, projectPlanning, googleSheetsData || [], [], sprintNames);
+        const html = await generateHtml(projectIssues, projectPlanning, employeeSheetsData || [], [], sprintNames);
         res.send(html);
     } catch (error) {
         console.error('Error in root route:', error);
@@ -519,6 +539,7 @@ interface SprintCapacity {
     sprint: string;
     capacity: number;
     project?: string; // Maak project optioneel
+    availableCapacity?: number; // Standaard gelijk aan de volledige capaciteit
 }
 
 interface Worklog {
@@ -558,9 +579,9 @@ async function getSprintCapacityFromSheet(googleSheetsData: (string | null)[][])
     logger.info(`Header rij: ${JSON.stringify(headerRow)}`);
 
     // Zoek de kolom indices
-    const nameIndex = headerRow.findIndex(header => header === 'Naam');
-    const effectiveHoursIndex = headerRow.findIndex(header => header === 'Effectieve uren');
-    const projectIndex = headerRow.findIndex(header => header === 'Project');
+    const nameIndex = headerRow.findIndex(header => header?.toLowerCase() === 'naam');
+    const effectiveHoursIndex = headerRow.findIndex(header => header?.toLowerCase() === 'effectieve uren');
+    const projectIndex = headerRow.findIndex(header => header?.toLowerCase() === 'project');
 
     // Log de gevonden indices voor debugging
     logger.info(`Kolom indices - Naam: ${nameIndex}, Effectieve uren: ${effectiveHoursIndex}, Project: ${projectIndex}`);
@@ -594,7 +615,8 @@ async function getSprintCapacityFromSheet(googleSheetsData: (string | null)[][])
                     employee: employeeName,
                     sprint: sprintNumber.toString(),
                     capacity: effectiveHours * 2, // 2 weken per sprint
-                    project: ''
+                    project: '',
+                    availableCapacity: effectiveHours * 2 // Standaard gelijk aan de volledige capaciteit
                 });
             } else {
                 projects.forEach(project => {
@@ -602,7 +624,8 @@ async function getSprintCapacityFromSheet(googleSheetsData: (string | null)[][])
                         employee: employeeName,
                         sprint: sprintNumber.toString(),
                         capacity: effectiveHours * 2, // 2 weken per sprint
-                        project: project
+                        project: project,
+                        availableCapacity: effectiveHours * 2 // Standaard gelijk aan de volledige capaciteit
                     });
                 });
             }
@@ -909,6 +932,17 @@ function getEmployeeAvailableHours(googleSheetsData: string[][] | null, employee
     return effectiveHours * 2; // 2 weken per sprint
 }
 
+// Helper functie om effectieve uren voor een specifieke medewerker op te halen
+function getEmployeeEffectiveHours(googleSheetsData: string[][] | null, employeeName: string): number {
+    if (!googleSheetsData) return 0;
+    
+    const employeeRow = googleSheetsData.find(row => row[2] === employeeName);
+    if (!employeeRow) return 0;
+    
+    const effectiveHours = parseFloat(employeeRow[6]) || 0;
+    return effectiveHours * 2; // 2 weken per sprint
+}
+
 app.get('/api/worklogs', async (req: Request, res: Response) => {
     try {
         const { startDate, endDate } = req.query;
@@ -921,7 +955,8 @@ app.get('/api/worklogs', async (req: Request, res: Response) => {
         const worklogConfigs = await getWorklogConfigsFromSheet();
         
         // Haal project configuraties op
-        const projectConfigs = await getProjectConfigsFromSheet();
+        const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
+        const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
         
         // Haal alle worklogs op voor de opgegeven periode
         const workLogsByProject = new Map<string, WorkLog[]>();
@@ -932,20 +967,19 @@ app.get('/api/worklogs', async (req: Request, res: Response) => {
                 const parsedEndDate = new Date(endDate.toString());
                 
                 const projectWorklogs = await getWorkLogsForProject(
-                    config.projectCodes,
                     parsedStartDate,
                     parsedEndDate,
-                    config
+                    config || { project: '', codes: [], jqlFilter: '', worklogName: '', worklogJql: '', sprintStartDate: null }
                 );
                 
                 // Filter worklogs op basis van project codes
                 const filteredWorklogs = projectWorklogs.filter(worklog => {
                     // Check of de issue key begint met een van de project codes
-                    return config.projectCodes.some(code => worklog.issueKey.startsWith(code + '-'));
+                    return config.codes.some(code => worklog.issueKey.startsWith(code + '-'));
                 });
-                workLogsByProject.set(config.projectName, filteredWorklogs);
+                workLogsByProject.set(config.project, filteredWorklogs);
             } catch (error) {
-                logger.error(`Error bij ophalen worklogs voor project ${config.projectName}: ${error}`);
+                logger.error(`Error bij ophalen worklogs voor project ${config.project}: ${error}`);
                 // Ga door met de volgende project configuratie
                 continue;
             }
@@ -975,7 +1009,7 @@ app.get('/api/worklogs', async (req: Request, res: Response) => {
         worklogGroups.forEach((configs: WorklogConfig[], worklogName: string) => {
             // Zoek het project met deze worklogName
             const projectConfig = projectConfigs.find(config => {
-                const normalizedConfigProjectName = config.projectName.toLowerCase().trim();
+                const normalizedConfigProjectName = config.project.toLowerCase().trim();
                 const normalizedSearchProjectName = worklogName.toLowerCase().trim();
                 
                 // Speciale behandeling voor Subscriptions
@@ -995,11 +1029,11 @@ app.get('/api/worklogs', async (req: Request, res: Response) => {
             
             // Verwijder dubbele projecten
             const uniqueProjectConfigs = projectConfigs.filter((config, index, self) => 
-                index === self.findIndex(c => c.projectName.toLowerCase() === config.projectName.toLowerCase())
+                index === self.findIndex(c => c.project.toLowerCase() === config.project.toLowerCase())
             );
             
             // Gebruik de worklogName uit de configuratie
-            const projectWorklogs = workLogsByProject.get(projectConfig.projectName) || [];
+            const projectWorklogs = workLogsByProject.get(projectConfig.project) || [];
             
             // Verzamel alle worklogs en issues voor de overkoepelende efficiency tabel
             allWorklogs = [...allWorklogs, ...projectWorklogs];
@@ -1172,7 +1206,7 @@ app.get('/api/worklogs', async (req: Request, res: Response) => {
             worklogsHtml += `
                 <div class="row">
                     <div class="col-md-12">
-                        <h4>Worklogs ${projectConfig.projectName}</h4>
+                        <h4>Worklogs ${projectConfig.project}</h4>
                         ${worklogsTable}
                     </div>
                 </div>
@@ -1649,8 +1683,9 @@ app.get('/planning', async (req, res) => {
             return res.status(400).send('Project type is verplicht');
         }
 
-        const projectConfigs = await getProjectConfigsFromSheet();
-        const projectConfig = projectConfigs.find(config => config.projectName === projectType);
+        const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
+        const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
+        const projectConfig = projectConfigs.find(config => config.project === projectType);
         if (!projectConfig) {
             return res.status(404).send('Project configuratie niet gevonden');
         }
@@ -1860,11 +1895,13 @@ async function loadWorklogs() {
     // Haal worklogs op voor alle projecten
     const worklogs = await Promise.all(
       projects.map(async (project: Project) => {
+        const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
+        const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
+        const config = projectConfigs.find(c => c.project === project.name);
         const projectWorklogs = await getWorkLogsForProject(
-          [project.key],
           new Date(),
           new Date(),
-          { projectName: project.name, projectCodes: [project.key], jqlFilter: '', worklogName: '', worklogJql: '' }
+          config || { project: project.name, codes: [project.key], jqlFilter: '', worklogName: '', worklogJql: '', sprintStartDate: null }
         );
         return {
           project,
@@ -1930,25 +1967,26 @@ app.get('/api/planning', async (req, res) => {
     console.log('================================\n');
     try {
         // Haal project configuraties op uit Google Sheets
-        const projectConfigs = await getProjectConfigsFromSheet();
+        const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
+        const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
         console.log(`Aantal project configuraties gevonden: ${projectConfigs.length}`);
 
         // Verwerk elk project
         const planningResults = [];
         for (const config of projectConfigs) {
-            console.log(`\nVerwerken van project: ${config.projectName}`);
+            console.log(`\nVerwerken van project: ${config.project}`);
             
             // Haal issues op voor dit project
             const issues = await getIssues(config.jqlFilter);
-            console.log(`Aantal issues gevonden voor ${config.projectName}: ${issues.length}`);
+            console.log(`Aantal issues gevonden voor ${config.project}: ${issues.length}`);
 
             // Bepaal project type op basis van projectnaam en projectcodes
-            const projectType = config.projectName;
+            const projectType = config.project;
 
             // Bereken planning voor dit project
             const planningResult = await calculatePlanning(issues, projectType, null);
             planningResults.push({
-                project: config.projectName,
+                project: config.project,
                 planning: planningResult
             });
         }
