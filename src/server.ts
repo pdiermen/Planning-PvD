@@ -453,85 +453,56 @@ function formatTime(seconds: number | undefined): string {
 }
 
 // Functie om issues te sorteren volgens de gewenste volgorde
-function sortIssues(issues: JiraIssue[]): JiraIssue[] {
+function sortIssues(issues: JiraIssue[], planning: PlanningResult): JiraIssue[] {
     // Definieer de volgorde van statussen
     const statusOrder: Record<string, number> = {
         'Resolved': 0,
         'In Review': 1,
-        'Open': 2,
-        'Reopended': 3,
-        'Reopend': 4,
+        'Ready for testing': 2,
+        'Open': 3,
+        'Reopended': 4,
+        'Reopend': 5,
         'Registered': 5,
         'Waiting': 6,
         'Testing': 7
     };
 
-    const sortedIssues: JiraIssue[] = [];
-    const processedIssues = new Set<string>();
-
-    // Functie om een issue en zijn opvolgers te verwerken
-    const processIssueAndSuccessors = (issue: JiraIssue) => {
-        if (processedIssues.has(issue.key)) return;
-        
-        // Vind alle voorgangers van dit issue
-        const predecessors = getPredecessors(issue);
-        
-        // Verwerk eerst alle voorgangers
-        for (const predecessorKey of predecessors) {
-            const predecessor = issues.find(i => i.key === predecessorKey);
-            if (predecessor && !processedIssues.has(predecessorKey)) {
-                processIssueAndSuccessors(predecessor);
-            }
-        }
-        
-        // Voeg het huidige issue toe
-        processedIssues.add(issue.key);
-        sortedIssues.push(issue);
-
-        // Vind alle opvolgers van dit issue
-        const successors = issues.filter(i => 
-            i.fields?.issuelinks?.some(link => 
-                (link.type.name === 'Blocks' || link.type.name === 'Depends On') && 
-                link.inwardIssue?.key === issue.key
-            )
-        );
-
-        // Sorteer opvolgers op status
-        const sortedSuccessors = [...successors].sort((a, b) => {
-            const statusA = a.fields?.status?.name || '';
-            const statusB = b.fields?.status?.name || '';
-            return (statusOrder[statusA] || 999) - (statusOrder[statusB] || 999);
-        });
-
-        // Verwerk opvolgers in gesorteerde volgorde
-        for (const successor of sortedSuccessors) {
-            processIssueAndSuccessors(successor);
-        }
+    // Definieer de volgorde van prioriteiten
+    const priorityOrder: Record<string, number> = {
+        'Highest': 0,
+        'High': 1,
+        'Medium': 2,
+        'Low': 3,
+        'Lowest': 4
     };
 
-    // Verwerk alle issues die geen voorgangers hebben
-    const issuesWithoutPredecessors = issues.filter(issue => getPredecessors(issue).length === 0);
-    
-    // Sorteer issues zonder voorgangers op status
-    const sortedIssuesWithoutPredecessors = [...issuesWithoutPredecessors].sort((a, b) => {
+    return [...issues].sort((a, b) => {
+        // Haal sprint nummers op uit de planning
+        const plannedIssueA = planning.plannedIssues?.find(pi => pi.issue.key === a.key);
+        const plannedIssueB = planning.plannedIssues?.find(pi => pi.issue.key === b.key);
+        const sprintA = plannedIssueA?.sprint || '999';
+        const sprintB = plannedIssueB?.sprint || '999';
+        
+        // Vergelijk sprint nummers
+        const sprintCompare = parseInt(sprintA) - parseInt(sprintB);
+        if (sprintCompare !== 0) return sprintCompare;
+
+        // Vergelijk due dates
+        const dueDateA = a.fields?.duedate ? new Date(a.fields.duedate).getTime() : Number.MAX_SAFE_INTEGER;
+        const dueDateB = b.fields?.duedate ? new Date(b.fields.duedate).getTime() : Number.MAX_SAFE_INTEGER;
+        if (dueDateA !== dueDateB) return dueDateA - dueDateB;
+
+        // Vergelijk statussen
         const statusA = a.fields?.status?.name || '';
         const statusB = b.fields?.status?.name || '';
-        return (statusOrder[statusA] || 999) - (statusOrder[statusB] || 999);
+        const statusCompare = (statusOrder[statusA] || 999) - (statusOrder[statusB] || 999);
+        if (statusCompare !== 0) return statusCompare;
+
+        // Vergelijk prioriteiten
+        const priorityA = a.fields?.priority?.name || 'Lowest';
+        const priorityB = b.fields?.priority?.name || 'Lowest';
+        return (priorityOrder[priorityA] || 999) - (priorityOrder[priorityB] || 999);
     });
-
-    // Verwerk eerst alle issues zonder voorgangers
-    for (const issue of sortedIssuesWithoutPredecessors) {
-        processIssueAndSuccessors(issue);
-    }
-
-    // Verwerk de resterende issues (met voorgangers)
-    for (const issue of issues) {
-        if (!processedIssues.has(issue.key)) {
-            processIssueAndSuccessors(issue);
-        }
-    }
-
-    return sortedIssues;
 }
 
 interface SprintCapacity {
@@ -711,7 +682,7 @@ async function generateHtml(
         const planning = projectPlanning.get(projectName);
         if (planning) {
             try {
-                await writePlanningAndIssuesToSheet(projectName, planning, issues);
+// *PvD*                await writePlanningAndIssuesToSheet(projectName, planning, issues);
             } catch (error) {
                 logger.error(`Error bij schrijven van planning en issues voor project ${projectName} naar Google Sheet: ${error}`);
             }
@@ -863,7 +834,7 @@ function generateIssuesTable(issues: JiraIssue[], planning: PlanningResult, spri
                     </tr>
                 </thead>
                 <tbody>
-                    ${sortIssues(issues).map(issue => {
+                    ${sortIssues(issues, planning).map(issue => {
                         const successors = getSuccessors(issue);
                         const predecessors = getPredecessors(issue);
                         
@@ -1424,12 +1395,27 @@ const styles = `
         margin-bottom: 30px; 
         background-color: white;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        table-layout: fixed;
     }
     th, td { 
         border: 1px solid #ddd; 
         padding: 12px 15px; 
         text-align: left; 
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
+    /* Dynamische kolombreedtes */
+    th:nth-child(1), td:nth-child(1) { width: 8%; } /* Issue */
+    th:nth-child(2), td:nth-child(2) { width: 25%; } /* Samenvatting */
+    th:nth-child(3), td:nth-child(3) { width: 8%; } /* Status */
+    th:nth-child(4), td:nth-child(4) { width: 8%; } /* Prioriteit */
+    th:nth-child(5), td:nth-child(5) { width: 10%; } /* Toegewezen aan */
+    th:nth-child(6), td:nth-child(6) { width: 6%; } /* Uren */
+    th:nth-child(7), td:nth-child(7) { width: 8%; } /* Sprint */
+    th:nth-child(8), td:nth-child(8) { width: 12%; } /* Voorgangers */
+    th:nth-child(9), td:nth-child(9) { width: 12%; } /* Opvolgers */
+    th:nth-child(10), td:nth-child(10) { width: 8%; } /* Due Date */
     th { 
         background-color: #f2f2f2; 
         font-weight: bold;
