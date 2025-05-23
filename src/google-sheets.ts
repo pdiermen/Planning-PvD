@@ -94,7 +94,7 @@ export interface WorklogConfig {
 
 export async function getWorklogConfigsFromSheet(): Promise<WorklogConfig[]> {
     try {
-        logger.log('Start ophalen van worklog configuraties uit Google Sheet...');
+        logger.info('Start ophalen van worklog configuraties uit Google Sheet...');
         
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
@@ -119,7 +119,7 @@ export async function getWorklogConfigsFromSheet(): Promise<WorklogConfig[]> {
             }
         });
 
-        logger.log(`${configs.length} worklog configuraties gevonden in Google Sheet`);
+        logger.info(`${configs.length} worklog configuraties gevonden in Google Sheet`);
         return configs;
     } catch (error: any) {
         logger.error(`Error bij ophalen van worklog configuraties uit Google Sheet: ${error.message}`);
@@ -129,7 +129,7 @@ export async function getWorklogConfigsFromSheet(): Promise<WorklogConfig[]> {
 
 export async function getGoogleSheetsData(range: string) {
   try {
-    logger.log(`Start ophalen van ${range} data...`);
+    logger.info(`Start ophalen van ${range} data...`);
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
@@ -174,7 +174,7 @@ export async function getGoogleSheetsData(range: string) {
       }
     }
 
-    logger.log(`${rows.length} rijen gevonden in ${range}`);
+    logger.info(`${rows.length} rijen gevonden in ${range}`);
     return rows;
   } catch (error) {
     logger.error(`Error bij ophalen van ${range} data: ${error instanceof Error ? error.message : error}`);
@@ -182,13 +182,13 @@ export async function getGoogleSheetsData(range: string) {
   }
 }
 
-export async function getSprintCapacityFromSheet(): Promise<SprintCapacity[]> {
+export async function getSprintCapacityFromSheet(googleSheetsData: (string | null)[][] | null): Promise<SprintCapacity[]> {
     try {
-        logger.log('Start ophalen van sprint capaciteit uit Google Sheet...');
+        logger.info('Start ophalen van sprint capaciteit uit Google Sheet...');
         
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: process.env.GOOGLE_SHEETS_SPREADSHEET_ID,
-            range: 'Employees!A2:H', // Pas dit aan naar het juiste bereik in je sheet
+            range: 'Employees!A1:H', // Inclusief header rij
         });
 
         const rows = response.data.values;
@@ -197,14 +197,41 @@ export async function getSprintCapacityFromSheet(): Promise<SprintCapacity[]> {
             throw new Error('Geen data gevonden in Google Sheet');
         }
 
+        // Log de eerste paar rijen voor debugging
+        logger.info('Eerste 3 rijen uit Google Sheet:');
+        for (let i = 0; i < Math.min(3, rows.length); i++) {
+            logger.info(`Rij ${i + 1}: ${JSON.stringify(rows[i])}`);
+        }
+
+        // Vind de juiste kolom indices
+        const headers = rows[0];
+        const employeeIndex = headers.findIndex((h: string) => h === 'Naam');
+        const hoursIndex = headers.findIndex((h: string) => h === 'Effectieve uren');
+        const projectIndex = headers.findIndex((h: string) => h === 'Project');
+
+        if (employeeIndex === -1 || hoursIndex === -1) {
+            logger.error('Verplichte kolommen niet gevonden in Google Sheet');
+            throw new Error('Verplichte kolommen niet gevonden in Google Sheet');
+        }
+
+        logger.info(`Gevonden kolom indices - Naam: ${employeeIndex}, Effectieve uren: ${hoursIndex}, Project: ${projectIndex}`);
+
         const capacities: SprintCapacity[] = [];
-        rows.forEach((row, index) => {
-            const [col1, col2, employee, col4, col5, col6, effectiveHours, projects] = row;
+        // Begin vanaf rij 1 (na de header)
+        for (let i = 1; i < rows.length; i++) {
+            const row = rows[i];
+            const employee = row[employeeIndex];
+            const effectiveHours = row[hoursIndex];
+            const projects = projectIndex !== -1 ? row[projectIndex] : '';
+
             if (employee && effectiveHours) {
                 const hours = parseFloat(effectiveHours.toString());
                 if (!isNaN(hours)) {
+                    logger.info(`Verwerken van medewerker ${employee} met ${hours} effectieve uren voor projecten: ${projects || 'geen specifieke projecten'}`);
+                    
                     // Genereer capaciteiten voor elke sprint
                     for (let sprintNumber = 1; sprintNumber <= 50; sprintNumber++) {
+                        // Als er geen specifieke projecten zijn opgegeven, voeg dan een algemene capaciteit toe
                         if (!projects || projects === '') {
                             capacities.push({
                                 employee,
@@ -213,22 +240,40 @@ export async function getSprintCapacityFromSheet(): Promise<SprintCapacity[]> {
                                 project: ''
                             });
                         } else {
+                            // Verwerk de specifieke projecten voor deze regel
                             const projectList = projects.toString().split(',').map((p: string) => p.trim());
                             projectList.forEach((project: string) => {
-                                capacities.push({
-                                    employee,
-                                    sprint: sprintNumber.toString(),
-                                    capacity: hours * 2, // 2 weken per sprint
-                                    project: project
-                                });
+                                if (project) { // Alleen toevoegen als er een project is opgegeven
+                                    capacities.push({
+                                        employee,
+                                        sprint: sprintNumber.toString(),
+                                        capacity: hours * 2, // 2 weken per sprint
+                                        project: project
+                                    });
+                                }
                             });
                         }
                     }
+                } else {
+                    logger.warn(`Ongeldige effectieve uren voor medewerker ${employee}: ${effectiveHours}`);
                 }
+            } else {
+                logger.warn(`Ongeldige rij gevonden: ${JSON.stringify(row)}`);
             }
+        }
+
+        // Log de gevonden capaciteiten voor debugging
+        const uniqueEmployees = new Set(capacities.map(c => c.employee));
+        logger.info(`Aantal unieke medewerkers: ${uniqueEmployees.size}`);
+        uniqueEmployees.forEach(emp => {
+            const empCapacities = capacities.filter(c => c.employee === emp);
+            const projects = new Set(empCapacities.map(c => c.project));
+            const totalCapacity = empCapacities.reduce((sum, c) => sum + c.capacity, 0);
+            logger.info(`Medewerker ${emp} heeft ${empCapacities.length} capaciteiten voor projecten: ${Array.from(projects).join(', ')}`);
+            logger.info(`Totale capaciteit voor ${emp}: ${totalCapacity} uren`);
         });
 
-        logger.log(`${capacities.length} sprint capaciteiten gevonden in Google Sheet`);
+        logger.info(`${capacities.length} sprint capaciteiten gevonden in Google Sheet`);
         return capacities;
     } catch (error: any) {
         logger.error(`Error bij ophalen van sprint capaciteit uit Google Sheet: ${error.message}`);
@@ -561,4 +606,18 @@ async function getSheetId(sheetName: string): Promise<number> {
     }
     
     return sheet.properties.sheetId;
-} 
+}
+
+// Error handling voor Google Sheets API
+process.on('unhandledRejection', (reason: unknown) => {
+    logger.error(`Unhandled Rejection: ${reason}`);
+    if (reason instanceof Error) {
+        logger.error(`Stack trace: ${reason.stack}`);
+    }
+});
+
+process.on('uncaughtException', (error: Error) => {
+    logger.error(`Unhandled Exception: ${error.message}`);
+    logger.error(`Stack trace: ${error.stack}`);
+    process.exit(1);
+}); 

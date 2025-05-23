@@ -56,6 +56,9 @@ td:nth-child(5) { width: 80px; } /* Points */
 td:nth-child(6) { width: 100px; } /* Orig. Tijd */
 td:nth-child(7) { width: 100px; } /* Rest. Tijd */
 td:nth-child(8) { width: 100px; } /* Parent */
+td:nth-child(9) { width: 120px; } /* Voorgangers */
+td:nth-child(10) { width: 120px; } /* Opvolgers */
+td:nth-child(11) { width: 120px; } /* Due Date */
 
 /* Responsive design */
 @media (max-width: 768px) {

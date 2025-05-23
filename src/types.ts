@@ -18,6 +18,7 @@ export interface IssueLink {
             status?: {
                 name: string;
             };
+            customfield_10020?: Sprint[];
         };
     };
     outwardIssue?: {
@@ -26,15 +27,15 @@ export interface IssueLink {
             status?: {
                 name: string;
             };
+            customfield_10020?: Sprint[];
         };
     };
 }
 
 export interface Sprint {
-    id: string;
-    self: string;
-    state: string;
+    id: number;
     name: string;
+    state: string;
 }
 
 export interface Issue {
@@ -74,6 +75,7 @@ export interface Issue {
                 comment?: string;
             }>;
         };
+        duedate?: string;
     };
     changelog?: {
         histories: IssueHistory[];
@@ -134,11 +136,11 @@ export interface WorkLogsResponse {
 }
 
 export interface ProjectConfig {
-    name: string;
-    projectType: string;
+    projectName: string;
     projectCodes: string[];
-    excludedParents: string[];
-    excludedStatuses: string[];
+    jqlFilter: string;
+    worklogName: string;
+    worklogJql: string;
 }
 
 export interface WorklogConfig {
@@ -172,7 +174,7 @@ export interface SprintCapacity {
 }
 
 export interface PlanningResult {
-    sprintHours: { [key: string]: Array<{ issueKey: string; hours: number; issues: Issue[] }> };
+    sprintHours: { [key: string]: { [key: string]: number } };
     plannedIssues: PlannedIssue[];
     issues: Issue[];
     sprints: SprintCapacity[];

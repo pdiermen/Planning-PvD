@@ -81,7 +81,7 @@ let activeIssuesCache: { issues: Issue[]; timestamp: number } | null = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minuten
 
 export async function getActiveIssues(): Promise<Issue[]> {
-    console.log('[DEBUG] getActiveIssues functie wordt aangeroepen');
+    logger.info('[DEBUG] getActiveIssues functie wordt aangeroepen');
     
     const response = await jiraClient.get('/rest/api/2/search', {
         params: {
@@ -93,7 +93,7 @@ export async function getActiveIssues(): Promise<Issue[]> {
     
     // Log de volledige API response voor het eerste issue
     if (response.data.issues.length > 0) {
-        console.log('[DEBUG] Volledige API response voor eerste issue:', JSON.stringify(response.data.issues[0], null, 2));
+        logger.info(`[DEBUG] Volledige API response voor eerste issue: ${JSON.stringify(response.data.issues[0], null, 2)}`);
     }
     
     return response.data.issues;
@@ -106,7 +106,7 @@ export async function getWorkLogs(projectKey: string, startDate: string, endDate
         if (jqlFilter) {
             jql += ` AND ${jqlFilter}`;
         }
-        logger.log(`Volledige JQL Query voor Worklogs: ${jql}`);
+        logger.info(`Volledige JQL Query voor Worklogs: ${jql}`);
         
         const response = await axios.get(
             `https://${JIRA_DOMAIN}/rest/api/3/search`,
@@ -155,7 +155,7 @@ export async function getWorkLogs(projectKey: string, startDate: string, endDate
             }
         }
         
-        logger.log(`Totaal aantal worklogs gevonden: ${worklogs.length}`);
+        logger.info(`Totaal aantal worklogs gevonden: ${worklogs.length}`);
         return worklogs;
     } catch (error) {
         logger.error(`Error bij ophalen van worklogs: ${error}`);
@@ -165,23 +165,23 @@ export async function getWorkLogs(projectKey: string, startDate: string, endDate
 
 export async function getSprintName(issue: Issue): Promise<string> {
     try {
-        logger.log(`Ophalen sprint naam voor issue ${issue.key}`);
+        logger.info(`Ophalen sprint naam voor issue ${issue.key}`);
         
         if (!issue.fields?.customfield_10020 || issue.fields.customfield_10020.length === 0) {
-            logger.log(`Geen sprint gevonden voor issue ${issue.key}`);
+            logger.info(`Geen sprint gevonden voor issue ${issue.key}`);
             return 'Niet gepland';
         }
         
         // Neem de eerste actieve sprint
         const activeSprint = issue.fields.customfield_10020.find(sprint => sprint.state === 'active');
         if (activeSprint) {
-            logger.log(`Actieve sprint gevonden voor issue ${issue.key}: ${activeSprint.name}`);
+            logger.info(`Actieve sprint gevonden voor issue ${issue.key}: ${activeSprint.name}`);
             return activeSprint.name;
         }
         
         // Als er geen actieve sprint is, neem de eerste sprint
         const sprint = issue.fields.customfield_10020[0];
-        logger.log(`Geen actieve sprint gevonden voor issue ${issue.key}, gebruik eerste sprint: ${sprint.name}`);
+        logger.info(`Geen actieve sprint gevonden voor issue ${issue.key}, gebruik eerste sprint: ${sprint.name}`);
         return sprint.name;
     } catch (error) {
         logger.error(`Error bij ophalen sprint naam voor issue ${issue.key}: ${error}`);
@@ -195,10 +195,10 @@ interface PriorityOrder {
 
 export async function getSprintCapacity(): Promise<SprintCapacity[]> {
     try {
-        logger.log('Start ophalen van sprint capaciteit...');
+        logger.info('Start ophalen van sprint capaciteit...');
         
         // Haal de capaciteit op uit Google Sheets
-        const sheetCapacities = await getSprintCapacityFromSheet();
+        const sheetCapacities = await getSprintCapacityFromSheet(null);
         
         // Standaard capaciteit per medewerker als fallback
         const defaultCapacities: { [key: string]: number } = {
@@ -228,7 +228,7 @@ export async function getSprintCapacity(): Promise<SprintCapacity[]> {
             }
         });
 
-        logger.log(`${capacities.length} sprint capaciteiten gegenereerd`);
+        logger.info(`${capacities.length} sprint capaciteiten gegenereerd`);
         return capacities;
     } catch (error: any) {
         logger.error(`Error bij ophalen van sprint capaciteit: ${error.message}`);
@@ -245,25 +245,25 @@ interface PlanningResult {
 
 export async function getPlanning(): Promise<PlanningResult> {
     try {
-        logger.log('Start ophalen van planning data...');
+        logger.info('Start ophalen van planning data...');
         
         // Haal alle benodigde data parallel op
         let issues: Issue[] = [];
         let sprintCapacities: SprintCapacity[] = [];
         
         try {
-            logger.log('Ophalen van actieve issues...');
+            logger.info('Ophalen van actieve issues...');
             issues = await getActiveIssues();
-            logger.log(`${issues.length} actieve issues gevonden`);
+            logger.info(`${issues.length} actieve issues gevonden`);
         } catch (error: any) {
             logger.error(`Error bij ophalen van issues: ${error.message}`);
             throw new Error(`Fout bij ophalen van issues: ${error.message}`);
         }
 
         try {
-            logger.log('Ophalen van sprint capaciteit...');
+            logger.info('Ophalen van sprint capaciteit...');
             sprintCapacities = await getSprintCapacity();
-            logger.log(`${sprintCapacities.length} sprint capaciteiten gevonden`);
+            logger.info(`${sprintCapacities.length} sprint capaciteiten gevonden`);
         } catch (error: any) {
             logger.error(`Error bij ophalen van sprint capaciteit: ${error.message}`);
             throw new Error(`Fout bij ophalen van sprint capaciteit: ${error.message}`);
@@ -278,7 +278,7 @@ export async function getPlanning(): Promise<PlanningResult> {
             sprintHours: {}
         };
 
-        logger.log('Planning data opgehaald');
+        logger.info('Planning data opgehaald');
         return planningResult;
     } catch (error: any) {
         logger.error(`Error bij ophalen van planning data: ${error.message}`);
@@ -307,12 +307,18 @@ export async function getIssuesForProject(projectConfig: ProjectConfig, startDat
         
         const jql = constructJqlQuery(projectConfig, startDate, endDate);
         logger.info({ message: `JQL query: ${jql}` });
-
+        
         const issues: Issue[] = [];
         let startAt = 0;
         const maxResults = 100;
 
+        logger.info('\n=== DEBUG: START OPHALEN ISSUES ===');
+        logger.info(`Project: ${projectConfig.projectName}`);
+        logger.info(`JQL query: ${jql}`);
+        logger.info(`Max results per batch: ${maxResults}`);
+
         while (true) {
+            logger.info(`\nOphalen batch vanaf index ${startAt}...`);
             const response = await jiraClient.get('/search', {
                 params: {
                     jql,
@@ -323,23 +329,36 @@ export async function getIssuesForProject(projectConfig: ProjectConfig, startDat
             });
 
             if (!response.data.issues || response.data.issues.length === 0) {
+                logger.info('Geen issues gevonden in deze batch');
                 break;
             }
-
+            
+            logger.info(`${response.data.issues.length} issues gevonden in deze batch`);
+            logger.info(`Totaal aantal issues volgens Jira: ${response.data.total}`);
+            
+            
             issues.push(...response.data.issues);
             logger.info({ message: `${response.data.issues.length} issues gevonden in deze batch, totaal ${response.data.total} issues volgens Jira` });
 
             if (startAt + maxResults >= response.data.total) {
+                logger.info('Alle issues opgehaald');
                 break;
             }
 
             startAt += maxResults;
         }
 
+    
+        logger.info(`\nTotaal ${issues.length} issues opgehaald voor project ${projectConfig.projectName}`);
+        logger.info('=== EINDE OPHALEN ISSUES ===\n');
+
         logger.info({ message: `Totaal ${issues.length} issues gevonden voor project ${projectConfig.projectName}` });
         return issues;
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error(`\nFOUT bij ophalen issues voor project ${projectConfig.projectName}:`);
+        logger.error(errorMessage);
+        logger.error('=== EINDE FOUTMELDING ===\n');
         logger.error({ message: `Error bij ophalen van issues voor project ${projectConfig.projectName}: ${errorMessage}` });
         throw error;
     }
@@ -391,7 +410,7 @@ export async function getWorkLogsForProject(
         }
     }
 
-    logger.log(`Medewerkers actief op project ${config.projectName}: ${Array.from(projectEmployees).join(', ')}`);
+    logger.info(`Medewerkers actief op project ${config.projectName}: ${Array.from(projectEmployees).join(', ')}`);
 
     while (true) {
         // Bouw basis JQL query met alleen project filter
@@ -406,7 +425,7 @@ export async function getWorkLogsForProject(
         const dateFilter = `worklogDate >= "${format(startDate, 'yyyy-MM-dd')}" AND worklogDate <= "${format(endDate, 'yyyy-MM-dd')}"`;
         jql += ` AND ${dateFilter}`;
 
-        logger.log(`Volledige JQL Query voor Worklogs: ${jql}`);
+        logger.info(`Volledige JQL Query voor Worklogs: ${jql}`);
 
         // Haal eerst de issues op
         const response = await jiraClient.get('/search', {
@@ -419,14 +438,14 @@ export async function getWorkLogsForProject(
         });
 
         const issues = response.data.issues || [];
-        logger.log(`Aantal issues gevonden in deze batch: ${issues.length}`);
+        logger.info(`Aantal issues gevonden in deze batch: ${issues.length}`);
 
         // Haal voor elk issue de worklogs op
         for (const issue of issues) {
             try {
                 // Controleer of het issue bij het juiste project hoort
                 if (!projectCodes.includes(issue.fields.project.key)) {
-                    logger.log(`Issue ${issue.key} hoort niet bij project ${projectCodes.join(',')}, wordt overgeslagen`);
+                    logger.info(`Issue ${issue.key} hoort niet bij project ${projectCodes.join(',')}, wordt overgeslagen`);
                     continue;
                 }
 
@@ -444,7 +463,7 @@ export async function getWorkLogsForProject(
                     });
 
                     if (filteredWorklogs.length > 0) {
-                        logger.log(`Issue ${issue.key}: ${filteredWorklogs.length} worklogs gevonden in de opgegeven periode voor actieve project medewerkers`);
+                        logger.info(`Issue ${issue.key}: ${filteredWorklogs.length} worklogs gevonden in de opgegeven periode voor actieve project medewerkers`);
                         const processedWorklogs = filteredWorklogs.map((log: JiraWorkLog) => ({
                             issueKey: issue.key,
                             issue: {
@@ -467,10 +486,10 @@ export async function getWorkLogsForProject(
                         
                         worklogs.push(...processedWorklogs);
                     } else {
-                        logger.log(`Issue ${issue.key}: Geen worklogs gevonden in de opgegeven periode voor actieve project medewerkers`);
+                        logger.info(`Issue ${issue.key}: Geen worklogs gevonden in de opgegeven periode voor actieve project medewerkers`);
                     }
                 } else {
-                    logger.log(`Issue ${issue.key}: Geen worklogs gevonden`);
+                    logger.info(`Issue ${issue.key}: Geen worklogs gevonden`);
                 }
             } catch (error) {
                 logger.error(`Error bij ophalen worklogs voor issue ${issue.key}: ${error}`);
@@ -483,14 +502,14 @@ export async function getWorkLogsForProject(
         const hasMore = startAt + maxResults < response.data.total;
         if (hasMore) {
             startAt += maxResults;
-            logger.log(`Er zijn meer resultaten beschikbaar. Volgende batch start bij ${startAt}`);
+            logger.info(`Er zijn meer resultaten beschikbaar. Volgende batch start bij ${startAt}`);
         } else {
-            logger.log(`Alle resultaten opgehaald (totaal: ${response.data.total}).`);
+            logger.info(`Alle resultaten opgehaald (totaal: ${response.data.total}).`);
             break;
         }
     }
 
-    logger.log(`Totaal aantal worklogs gevonden voor project ${config.projectName}: ${worklogs.length}`);
+    logger.info(`Totaal aantal worklogs gevonden voor project ${config.projectName}: ${worklogs.length}`);
     return worklogs;
 }
 
@@ -498,7 +517,7 @@ export async function getWorklogsForIssues(issues: Issue[]): Promise<WorkLog[]> 
     try {
         const issueKeys = issues.map(issue => issue.key);
         const worklogIssuesJql = `key in (${issueKeys.join(',')})`;
-        logger.log(`Volledige JQL Query voor Worklogs: ${worklogIssuesJql}`);
+        logger.info(`Volledige JQL Query voor Worklogs: ${worklogIssuesJql}`);
         
         const worklogs: WorkLog[] = [];
         let startAt = 0;
@@ -529,7 +548,7 @@ export async function getWorklogsForIssues(issues: Issue[]): Promise<WorkLog[]> 
             // Verwerk worklogs voor elke issue
             for (const issue of batchIssues) {
                 const issueWorklogs = issue.fields.worklog?.worklogs || [];
-                logger.log(`Issue ${issue.key}: ${issueWorklogs.length} worklogs gevonden`);
+                logger.info(`Issue ${issue.key}: ${issueWorklogs.length} worklogs gevonden`);
                 
                 for (const log of issueWorklogs) {
                     worklogs.push({
@@ -546,15 +565,15 @@ export async function getWorklogsForIssues(issues: Issue[]): Promise<WorkLog[]> 
                 }
             }
             
-            logger.log(`Aantal worklogs gevonden in deze batch: ${worklogs.length}`);
-            logger.log(`Totaal aantal worklogs tot nu toe: ${worklogs.length}`);
+            logger.info(`Aantal worklogs gevonden in deze batch: ${worklogs.length}`);
+            logger.info(`Totaal aantal worklogs tot nu toe: ${worklogs.length}`);
             
             hasMore = worklogs.length < totalIssues;
             if (hasMore) {
-                logger.log(`Er zijn meer resultaten beschikbaar (totaal: ${totalIssues}). Paginering nodig.`);
+                logger.info(`Er zijn meer resultaten beschikbaar (totaal: ${totalIssues}). Paginering nodig.`);
                 startAt += maxResults;
             } else {
-                logger.log(`Alle resultaten opgehaald (totaal: ${totalIssues}).`);
+                logger.info(`Alle resultaten opgehaald (totaal: ${totalIssues}).`);
             }
         }
         
@@ -568,7 +587,7 @@ export async function getWorklogsForIssues(issues: Issue[]): Promise<WorkLog[]> 
 export async function getIssuesWithWorklogs(startDate: string, endDate: string): Promise<Issue[]> {
     try {
         const jql = `project = EET AND worklogDate >= "${startDate}" AND worklogDate <= "${endDate}"`;
-        logger.log(`Volledige JQL Query voor Issues met Worklogs: ${jql}`);
+        logger.info(`Volledige JQL Query voor Issues met Worklogs: ${jql}`);
         
         const allIssues: Issue[] = [];
         let startAt = 0;
@@ -609,16 +628,16 @@ export async function getIssuesWithWorklogs(startDate: string, endDate: string):
             allIssues.push(...batchIssues);
             totalIssues = response.data.total;
             
-            logger.log(`Aantal issues gevonden in deze batch: ${batchIssues.length}`);
-            logger.log(`Totaal aantal issues tot nu toe: ${allIssues.length}`);
-            logger.log(`Totaal aantal issues volgens Jira: ${totalIssues}`);
+            logger.info(`Aantal issues gevonden in deze batch: ${batchIssues.length}`);
+            logger.info(`Totaal aantal issues tot nu toe: ${allIssues.length}`);
+            logger.info(`Totaal aantal issues volgens Jira: ${totalIssues}`);
             
             hasMore = allIssues.length < totalIssues;
             if (hasMore) {
-                logger.log(`Er zijn meer resultaten beschikbaar (totaal: ${totalIssues}). Paginering nodig.`);
+                logger.info(`Er zijn meer resultaten beschikbaar (totaal: ${totalIssues}). Paginering nodig.`);
                 startAt += maxResults;
             } else {
-                logger.log(`Alle resultaten opgehaald (totaal: ${totalIssues}).`);
+                logger.info(`Alle resultaten opgehaald (totaal: ${totalIssues}).`);
             }
         }
         
@@ -629,32 +648,30 @@ export async function getIssuesWithWorklogs(startDate: string, endDate: string):
     }
 }
 
-export async function getIssues(jql: string): Promise<Issue[]> {
+export async function getIssues(jqlFilter: string): Promise<Issue[]> {
     try {
+        logger.info(`Ophalen van issues met JQL filter: ${jqlFilter}`);
+        
         const response = await jiraClient.get('/search', {
             params: {
-                jql,
+                jql: jqlFilter,
                 maxResults: 1000,
                 fields: [
                     'summary',
-                    'timeestimate',
-                    'timeoriginalestimate',
                     'status',
                     'assignee',
-                    'created',
-                    'resolutiondate',
-                    'worklog'
+                    'timeestimate',
+                    'customfield_10020', // Sprint field
+                    'issuelinks',
+                    'duedate'
                 ]
             }
         });
-        logger.log(`Volledige JQL Query voor Issues: ${jql}`);
-        logger.log(`Opgehaalde issues: ${response.data.issues.length}`);
+
+        logger.info(`${response.data.issues.length} issues gevonden`);
         return response.data.issues;
-    } catch (error: any) {
-        logger.error(`Fout bij ophalen issues: ${error}`);
-        if (error.response?.data) {
-            logger.error(`API Response: ${JSON.stringify(error.response.data)}`);
-        }
-        return [];
+    } catch (error) {
+        logger.error(`Error bij ophalen van issues: ${error instanceof Error ? error.message : error}`);
+        throw error;
     }
 }

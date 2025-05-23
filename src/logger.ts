@@ -14,23 +14,29 @@ if (fs.existsSync(logFile)) {
 }
 
 const winstonLogger = winston.createLogger({
-  level: 'info',
+  level: 'debug',
   format: winston.format.combine(
     winston.format.timestamp(),
-    winston.format.json()
+    winston.format.printf(({ timestamp, level, message }) => {
+      return `${timestamp} [${level}]: ${message}`;
+    })
   ),
   transports: [
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
-        winston.format.simple()
+        winston.format.printf(({ timestamp, level, message }) => {
+          return `${timestamp} [${level}]: ${message}`;
+        })
       )
     }),
     new winston.transports.File({ 
       filename: logFile,
       format: winston.format.combine(
         winston.format.timestamp(),
-        winston.format.json()
+        winston.format.printf(({ timestamp, level, message }) => {
+          return `${timestamp} [${level}]: ${message}`;
+        })
       )
     })
   ]
@@ -47,10 +53,26 @@ winstonLogger.rejections.handle(
 
 // Create a logger object with compatibility layer
 const logger = {
-    info: (message: string | { message: string }) => winstonLogger.info(typeof message === 'string' ? { message } : message),
-    warn: (message: string | { message: string }) => winstonLogger.warn(typeof message === 'string' ? { message } : message),
-    error: (message: string | { message: string }) => winstonLogger.error(typeof message === 'string' ? { message } : message),
-    log: (message: string | { message: string }) => winstonLogger.info(typeof message === 'string' ? { message } : message)
+    info: (message: string | { message: string }) => {
+        const msg = typeof message === 'string' ? message : message.message;
+        winstonLogger.info(msg);
+    },
+    warn: (message: string | { message: string }) => {
+        const msg = typeof message === 'string' ? message : message.message;
+        winstonLogger.warn(msg);
+    },
+    error: (message: string | { message: string }) => {
+        const msg = typeof message === 'string' ? message : message.message;
+        winstonLogger.error(msg);
+    },
+    log: (message: string | { message: string }) => {
+        const msg = typeof message === 'string' ? message : message.message;
+        winstonLogger.info(msg);
+    },
+    debug: (message: string | { message: string }) => {
+        const msg = typeof message === 'string' ? message : message.message;
+        winstonLogger.debug(msg);
+    }
 };
 
 export default logger; 

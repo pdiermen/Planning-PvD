@@ -5,12 +5,12 @@ export function getSuccessors(issue: Issue): string[] {
     
     return issue.fields.issuelinks
         .filter(link => 
-            (link.type.name === 'Blocks' || 
-             link.type.name === 'Depends On' || 
-             (link.type.name === 'Predecessor' && link.type.inward === 'is a predecessor of')) && 
-            link.outwardIssue?.key
+            link.type.name === 'Predecessor' && 
+            link.type.inward === 'is a predecessor of' &&
+            link.inwardIssue?.key &&
+            link.inwardIssue.fields?.status?.name !== 'Closed'
         )
-        .map(link => link.outwardIssue!.key);
+        .map(link => link.inwardIssue!.key);
 }
 
 export function getPredecessors(issue: Issue): string[] {
@@ -18,10 +18,10 @@ export function getPredecessors(issue: Issue): string[] {
     
     return issue.fields.issuelinks
         .filter(link => 
-            (link.type.name === 'Blocks' || 
-             link.type.name === 'Depends On' || 
-             (link.type.name === 'Predecessor' && link.type.inward === 'is a predecessor of')) && 
-            link.inwardIssue?.key
+            link.type.name === 'Predecessor' && 
+            link.type.outward === 'has as a predecessor' &&
+            link.outwardIssue?.key &&
+            link.outwardIssue.fields?.status?.name !== 'Closed'
         )
-        .map(link => link.inwardIssue!.key);
+        .map(link => link.outwardIssue!.key);
 } 
