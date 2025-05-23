@@ -9,9 +9,10 @@ import { getProjectConfigsFromSheet } from '../google-sheets.js';
 const STATUS_ORDER: Record<string, number> = {
     'Resolved': 0,
     'In Review': 1,
-    'Open': 2,
-    'Reopended': 3,
-    'Reopend': 4,
+    'Ready for testing': 2,
+    'Open': 3,
+    'Reopended': 4,
+    'Reopend': 5,
     'Registered': 5,
     'Waiting': 6,
     'Testing': 7
@@ -240,7 +241,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
     }
 
     // Begin vanaf de sprint na de laatste voorganger
-    const startFromIndex = Math.max(startIndex, lastPredecessorSprintIndex + 1);
+    let startFromIndex = Math.max(startIndex, lastPredecessorSprintIndex + 1);
 
     // Controleer eerst of het issue überhaupt in een sprint past
     if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
@@ -263,9 +264,34 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
         }
     }
 
+    // Haal de due date van het issue op
+    const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate) : null;
+    const currentDate = new Date();
+
+    // Als het issue een due date heeft die in het verleden ligt,
+    // begin dan vanaf de huidige sprint
+    if (dueDate && dueDate < currentDate) {
+        const currentSprintIndex = sprintNames.indexOf(planningResult.currentSprint);
+        if (currentSprintIndex !== -1) {
+            startFromIndex = Math.max(startFromIndex, currentSprintIndex);
+        }
+    }
+
     // Begin vanaf de opgegeven index
     for (let i = startFromIndex; i < sprintNames.length; i++) {
         const sprintName = sprintNames[i];
+        
+        // Als het issue een due date heeft, controleer of deze sprint de due date bevat
+        if (dueDate) {
+            const sprintStartDate = new Date(planningResult.sprints.find(s => s.sprint === sprintName)?.startDate || '');
+            const sprintEndDate = new Date(sprintStartDate);
+            sprintEndDate.setDate(sprintStartDate.getDate() + 14); // Sprint duurt 2 weken
+
+            // Als de due date na deze sprint ligt, probeer de volgende sprint
+            if (dueDate > sprintEndDate) {
+                continue;
+            }
+        }
         
         // Voor Peter van Diermen en Unassigned, gebruik de totale sprint capaciteit
         if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
@@ -521,8 +547,27 @@ const compareDueDates = (a: Issue, b: Issue): number => {
     // Als alleen issue b een due date heeft
     if (bDueDate) return 1;
 
-    // Als geen van beide een due date heeft
-    return 0;
+    // Als geen van beide een due date heeft, sorteer op basis van status en prioriteit
+    const aStatus = a.fields?.status?.name || '';
+    const bStatus = b.fields?.status?.name || '';
+
+    if (STATUS_ORDER[aStatus] !== STATUS_ORDER[bStatus]) {
+        return STATUS_ORDER[aStatus] - STATUS_ORDER[bStatus];
+    }
+
+    // Als de status gelijk is, sorteer op basis van prioriteit
+    const priorityOrder: Record<string, number> = {
+        'Highest': 0,
+        'High': 1,
+        'Medium': 2,
+        'Low': 3,
+        'Lowest': 4
+    };
+
+    const aPriority = a.fields?.priority?.name || '';
+    const bPriority = b.fields?.priority?.name || '';
+
+    return priorityOrder[aPriority] - priorityOrder[bPriority];
 };
 
 // Helper functie om te controleren of een datum een werkdag is (ma-vr)
@@ -544,6 +589,15 @@ function getWorkDaysBetween(startDate: Date, endDate: Date): number {
     }
     
     return workDays;
+}
+
+interface SprintCapacity {
+    sprint: string;
+    employee: string;
+    capacity: number;
+    availableCapacity: number;
+    project: string;
+    startDate?: string; // Optioneel omdat niet alle sprints een startDate hebben
 }
 
 export async function calculatePlanning(issues: Issue[], projectType: string, googleSheetsData: (string | null)[][] | null): Promise<PlanningResult> {
@@ -681,7 +735,7 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
         return true;
     };
 
-    // Sorteer issues op basis van voorgangers, opvolgers en due dates
+    // Sorteer issues op basis van relaties en due dates
     const issuesToSort = [...issues];
     const originalKeys = new Set(issuesToSort.map(issue => issue.key));
 
@@ -726,7 +780,41 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
 
         // Als er geen relaties zijn of als de relaties geen due date conflicten hebben,
         // sorteer op basis van due dates
-        return compareDueDates(a, b);
+        const aDueDate = getDueDate(a);
+        const bDueDate = getDueDate(b);
+
+        // Als beide issues een due date hebben
+        if (aDueDate && bDueDate) {
+            return aDueDate.getTime() - bDueDate.getTime();
+        }
+
+        // Als alleen issue a een due date heeft
+        if (aDueDate) return -1;
+
+        // Als alleen issue b een due date heeft
+        if (bDueDate) return 1;
+
+        // Als geen van beide een due date heeft, sorteer op basis van status en prioriteit
+        const aStatus = a.fields?.status?.name || '';
+        const bStatus = b.fields?.status?.name || '';
+
+        if (STATUS_ORDER[aStatus] !== STATUS_ORDER[bStatus]) {
+            return STATUS_ORDER[aStatus] - STATUS_ORDER[bStatus];
+        }
+
+        // Als de status gelijk is, sorteer op basis van prioriteit
+        const priorityOrder: Record<string, number> = {
+            'Highest': 0,
+            'High': 1,
+            'Medium': 2,
+            'Low': 3,
+            'Lowest': 4
+        };
+
+        const aPriority = a.fields?.priority?.name || '';
+        const bPriority = b.fields?.priority?.name || '';
+
+        return priorityOrder[aPriority] - priorityOrder[bPriority];
     });
 
     // Verifieer dat alle issues nog steeds aanwezig zijn
