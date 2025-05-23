@@ -171,11 +171,6 @@ const checkSprintCapacity = (sprintName: string, issue: Issue, assignee: string,
 
     // Voor Peter van Diermen en Unassigned, gebruik de totale sprint capaciteit
     if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
-        // Als het issue 0 uren heeft, is het al goedgekeurd als het na zijn voorgangers komt
-        if (issueHours === 0) {
-            return true;
-        }
-
         // Bereken totale sprint capaciteit
         const totalSprintCapacity = planningResult.sprintCapacity
             .filter(c => c.sprint === sprintName)
@@ -185,7 +180,6 @@ const checkSprintCapacity = (sprintName: string, issue: Issue, assignee: string,
         const totalUsedHours = Object.values(planningResult.employeeSprintUsedHours)
             .reduce((sum, sprintData) => sum + (sprintData[sprintName] || 0), 0);
 
-       
         // Debug logging voor sprint capaciteiten
         logger.info('\nSprint capaciteiten details:');
         planningResult.sprintCapacity
@@ -212,11 +206,6 @@ const checkSprintCapacity = (sprintName: string, issue: Issue, assignee: string,
     )?.capacity || 0;
 
     const employeeUsed = planningResult.employeeSprintUsedHours[assignee]?.[sprintName] || 0;
-
-    // Als het issue 0 uren heeft, is het al goedgekeurd als het na zijn voorgangers komt
-    if (issueHours === 0) {
-        return true;
-    }
 
     return employeeUsed + issueHours <= employeeCapacity;
 };
@@ -289,8 +278,8 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
 
             const availableCapacity = totalCapacity - usedHours;
 
-            // Als het issue 0 uren heeft of er is voldoende capaciteit
-            if (issueHours === 0 || availableCapacity >= issueHours) {
+            // Als er voldoende capaciteit is
+            if (availableCapacity >= issueHours) {
                 return sprintName;
             }
         } else {
@@ -302,8 +291,8 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
             const usedHours = planningResult.employeeSprintUsedHours[assignee]?.[sprintName] || 0;
             const availableCapacity = totalCapacity - usedHours;
 
-            // Als het issue 0 uren heeft of er is voldoende capaciteit
-            if (issueHours === 0 || availableCapacity >= issueHours) {
+            // Als er voldoende capaciteit is
+            if (availableCapacity >= issueHours) {
                 return sprintName;
             }
         }
@@ -629,17 +618,11 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
     };
 
     // Sorteer issues op basis van voorgangers, opvolgers en due dates
-    
-
-    // Maak een kopie van de issues lijst voor sortering
     const issuesToSort = [...issues];
-    
-    // Verifieer dat alle issues behouden blijven
     const originalKeys = new Set(issuesToSort.map(issue => issue.key));
 
     // Sorteer issues op basis van relaties en due dates
     const sortedIssues = issuesToSort.sort((a, b) => {
-    
         // Bepaal of issues relaties hebben
         const aHasRelations = getPredecessors(a).length > 0 || getSuccessors(a).length > 0;
         const bHasRelations = getPredecessors(b).length > 0 || getSuccessors(b).length > 0;
@@ -659,7 +642,6 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
             const aSuccessors = getSuccessors(a);
             const bSuccessors = getSuccessors(b);
 
-    
             // Als a een voorganger is van b
             if (aSuccessors.includes(b.key)) {
                 return -1;
@@ -670,7 +652,7 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
             }
             // Als a een opvolger is van b
             if (aPredecessors.includes(b.key)) {
-                 return 1;
+                return 1;
             }
             // Als b een opvolger is van a
             if (bPredecessors.includes(a.key)) {
@@ -680,22 +662,17 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
 
         // Als er geen relaties zijn of als de relaties geen due date conflicten hebben,
         // sorteer op basis van due dates
-        const result = compareDueDates(a, b);
-    
-        return result;
+        return compareDueDates(a, b);
     });
 
     // Verifieer dat alle issues nog steeds aanwezig zijn
     const sortedKeys = new Set(sortedIssues.map(issue => issue.key));
-  
-    // Controleer of er issues ontbreken
     const missingKeys = [...originalKeys].filter(key => !sortedKeys.has(key));
     if (missingKeys.length > 0) {
         logger.info(`\nWAARSCHUWING: Ontbrekende issues na sortering:`);
         missingKeys.forEach(key => logger.info(`- ${key}`));
-    } 
+    }
 
- 
     // Loop door de gesorteerde issues en plan ze
     for (let i = 0; i < sortedIssues.length; i++) {
         const issue = sortedIssues[i];
@@ -703,12 +680,28 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
             issue.fields.assignee.displayName : 
             'Unassigned';
         
-        
         // Vind de eerste beschikbare sprint
         const sprintName = findFirstAvailableSprint(issue, result, 0);
         
         // Plan het issue
         const planned = planIssue(issue, sprintName, assignee);
+    }
+
+    // Valideer de planning volgorde
+    let isValid = false;
+    let attempts = 0;
+    const maxAttempts = 3;
+
+    while (!isValid && attempts < maxAttempts) {
+        isValid = validatePlanningOrder(result);
+        if (!isValid) {
+            logger.info(`\nPoging ${attempts + 1} van ${maxAttempts} om planning volgorde te corrigeren...`);
+            attempts++;
+        }
+    }
+
+    if (!isValid) {
+        logger.info(`\nWAARSCHUWING: Kon planning volgorde niet volledig corrigeren na ${maxAttempts} pogingen`);
     }
 
     return result;
