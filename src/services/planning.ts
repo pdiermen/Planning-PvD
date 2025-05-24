@@ -773,6 +773,12 @@ interface SprintCapacity {
 }
 
 export async function calculatePlanning(issues: Issue[], projectType: string, googleSheetsData: (string | null)[][] | null): Promise<PlanningResult> {
+    // Debug logging voor alle issues
+    logger.info('\nDebug: Alle issues in de planning:');
+    issues.forEach(issue => {
+        logger.info(`- ${issue.key}: ${issue.fields?.summary || 'Geen titel'}`);
+    });
+
     // Verzamel sprint capaciteiten uit Google Sheets
     const sprintCapacities = await getSprintCapacityFromSheet(googleSheetsData);
     
@@ -1002,11 +1008,34 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
         const issue = sortedIssues[i];
         const assignee = getAssigneeName(issue.fields?.assignee);
         
+        // Debug logging voor AMP-14721
+        if (issue.key === 'AMP-14721') {
+            logger.info(`\nDebug: Proberen AMP-14721 te plannen`);
+            logger.info(`- Assignee: ${assignee}`);
+            logger.info(`- Voorgangers: ${getPredecessors(issue).join(', ')}`);
+            logger.info(`- Opvolgers: ${getSuccessors(issue).join(', ')}`);
+            logger.info(`- Uren: ${(issue.fields?.timeestimate || 0) / 3600}`);
+        }
+        
         // Vind de eerste beschikbare sprint
         const sprintName = findFirstAvailableSprint(issue, result, 0);
         
+        // Debug logging voor AMP-14721
+        if (issue.key === 'AMP-14721') {
+            logger.info(`- Gevonden sprint: ${sprintName}`);
+            logger.info(`- Beschikbare capaciteit in sprint ${sprintName}: ${getAvailableCapacity(sprintName, assignee, result)}`);
+        }
+        
         // Plan het issue
         const planned = planIssue(issue, sprintName, assignee);
+        
+        // Debug logging voor AMP-14721
+        if (issue.key === 'AMP-14721') {
+            logger.info(`- Gepland: ${planned}`);
+            if (!planned) {
+                logger.info(`- Reden: Geen voldoende capaciteit in sprint ${sprintName}`);
+            }
+        }
     }
 
     // Valideer de planning volgorde
