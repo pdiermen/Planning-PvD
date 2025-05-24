@@ -5,17 +5,17 @@ import { getSuccessors, getPredecessors } from '../utils/jira-helpers.js';
 import { getAssigneeName } from '../utils/shared-functions.js';
 import { getProjectConfigsFromSheet } from '../google-sheets.js';
 
-// Status volgorde voor sortering
-const STATUS_ORDER: Record<string, number> = {
+// Definieer de volgorde van statussen
+export const STATUS_ORDER: Record<string, number> = {
     'Resolved': 0,
     'In Review': 1,
     'Ready for testing': 2,
     'Open': 3,
-    'Reopended': 4,
-    'Reopend': 5,
+    'Reopend': 4,
     'Registered': 5,
     'Waiting': 6,
-    'Testing': 7
+    'In Progress': 7,
+    'Testing': 8
 };
 
 // Helper functie om te valideren of de planning voldoet aan de volgorde-eisen
@@ -24,21 +24,28 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
     for (const plannedIssue of planning.plannedIssues) {
         const issue = plannedIssue.issue;
         
-        // Valideer opvolgers
-        const successors = getSuccessors(issue);
-        for (const successorKey of successors) {
-            const successor = planning.plannedIssues.find(pi => pi.issue.key === successorKey);
-            if (successor) {
-                const issueSprintIndex = planning.sprints.findIndex(s => s.sprint === plannedIssue.sprint);
-                const successorSprintIndex = planning.sprints.findIndex(s => s.sprint === successor.sprint);
-                
-                if (successorSprintIndex <= issueSprintIndex) {
-                    logger.info(`\nFout: Opvolger ${successorKey} is gepland in sprint ${successor.sprint} terwijl ${issue.key} in sprint ${plannedIssue.sprint} zit`);
+        // Valideer due date
+        const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate) : null;
+        if (dueDate) {
+            const sprintName = plannedIssue.sprint;
+            const sprint = planning.sprints.find(s => s.sprint === sprintName);
+            if (sprint?.startDate) {
+                const sprintStartDate = new Date(sprint.startDate);
+                const sprintEndDate = new Date(sprintStartDate);
+                sprintEndDate.setDate(sprintStartDate.getDate() + 14); // Sprint duurt 2 weken
+
+                // Als de due date voor de sprint start, moet het issue in een eerdere sprint
+                if (dueDate < sprintStartDate) {
+                    logger.info(`\nFout: Issue ${issue.key} heeft een due date (${dueDate.toISOString()}) voor sprint ${sprintName} (${sprintStartDate.toISOString()})`);
                     
-                    // Verplaats het issue naar een latere sprint
-                    const newSprintIndex = successorSprintIndex + 1;
-                    if (newSprintIndex < planning.sprints.length) {
-                        const newSprint = planning.sprints[newSprintIndex].sprint;
+                    // Vind de eerste sprint die na de due date start
+                    const sprintIndex = planning.sprints.findIndex(s => {
+                        const startDate = new Date(s.startDate || '');
+                        return startDate >= dueDate;
+                    });
+                    
+                    if (sprintIndex !== -1) {
+                        const newSprint = planning.sprints[sprintIndex].sprint;
                         logger.info(`Issue ${issue.key} wordt verplaatst naar sprint ${newSprint}`);
                         
                         // Update de sprint van het issue
@@ -75,6 +82,65 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
                             planning.sprintAssignments[newSprint][plannedIssue.assignee] = [];
                         }
                         planning.sprintAssignments[newSprint][plannedIssue.assignee].push(issue);
+                        
+                        isValid = false;
+                    }
+                }
+            }
+        }
+        
+        // Valideer opvolgers
+        const successors = getSuccessors(issue);
+        for (const successorKey of successors) {
+            const successor = planning.plannedIssues.find(pi => pi.issue.key === successorKey);
+            if (successor) {
+                const issueSprintIndex = planning.sprints.findIndex(s => s.sprint === plannedIssue.sprint);
+                const successorSprintIndex = planning.sprints.findIndex(s => s.sprint === successor.sprint);
+                
+                // Als de opvolger in dezelfde sprint of een eerdere sprint staat dan het issue
+                if (successorSprintIndex <= issueSprintIndex) {
+                    logger.info(`\nFout: Opvolger ${successorKey} is gepland in sprint ${successor.sprint} terwijl ${issue.key} in sprint ${plannedIssue.sprint} zit`);
+                    
+                    // Verplaats de opvolger naar een latere sprint
+                    const newSprintIndex = issueSprintIndex + 1;
+                    if (newSprintIndex < planning.sprints.length) {
+                        const newSprint = planning.sprints[newSprintIndex].sprint;
+                        logger.info(`Opvolger ${successorKey} wordt verplaatst naar sprint ${newSprint}`);
+                        
+                        // Update de sprint van de opvolger
+                        successor.sprint = newSprint;
+                        
+                        // Update sprintHours
+                        const oldSprintHours = planning.sprintHours[successor.sprint];
+                        if (oldSprintHours) {
+                            const issueHours = oldSprintHours[successor.assignee] || 0;
+                            if (issueHours > 0) {
+                                // Verwijder uit oude sprint
+                                planning.sprintHours[successor.sprint][successor.assignee] -= issueHours;
+                                
+                                // Voeg toe aan nieuwe sprint
+                                if (!planning.sprintHours[newSprint]) {
+                                    planning.sprintHours[newSprint] = {};
+                                }
+                                if (!planning.sprintHours[newSprint][successor.assignee]) {
+                                    planning.sprintHours[newSprint][successor.assignee] = 0;
+                                }
+                                planning.sprintHours[newSprint][successor.assignee] += issueHours;
+                            }
+                        }
+                        
+                        // Update sprintAssignments
+                        if (planning.sprintAssignments[successor.sprint]?.[successor.assignee]) {
+                            planning.sprintAssignments[successor.sprint][successor.assignee] = 
+                                planning.sprintAssignments[successor.sprint][successor.assignee].filter(i => i.key !== successorKey);
+                        }
+                        if (!planning.sprintAssignments[newSprint]) {
+                            planning.sprintAssignments[newSprint] = {};
+                        }
+                        if (!planning.sprintAssignments[newSprint][successor.assignee]) {
+                            planning.sprintAssignments[newSprint][successor.assignee] = [];
+                        }
+                        planning.sprintAssignments[newSprint][successor.assignee].push(successor.issue);
                         
                         isValid = false;
                     }
@@ -218,116 +284,309 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
     const assignee = getAssigneeName(issue.fields?.assignee);
     if (!assignee) return '100'; // Fallback sprint als er geen assignee is
 
+    // Extra logging voor EET-6424
+    if (issue.key === 'EET-6424') {
+        logger.info(`\nAnalyse van EET-6424:`);
+        logger.info(`- Due date: ${issue.fields?.duedate}`);
+        logger.info(`- Assignee: ${assignee}`);
+        logger.info(`- Start index: ${startIndex}`);
+        logger.info(`- Aantal sprints: ${planningResult.sprints.length}`);
+        logger.info(`- Sprint data:`);
+        planningResult.sprints.forEach(sprint => {
+            logger.info(`  * Sprint ${sprint.sprint}: ${sprint.startDate}`);
+        });
+    }
+
     const issueHours = (issue.fields?.timeestimate || 0) / 3600;
     const sprintNames = [...new Set(planningResult.sprintCapacity.map(cap => cap.sprint))]
         .sort((a, b) => parseInt(a) - parseInt(b));
 
-    // Vind de sprint van de laatste voorganger
+    // Controleer eerst of er voorgangers zijn in sprint 100
     const predecessors = getPredecessors(issue);
+    for (const predecessorKey of predecessors) {
+        const predecessor = planningResult.plannedIssues.find(pi => pi.issue.key === predecessorKey);
+        if (predecessor && predecessor.sprint === '100') {
+            if (issue.key === 'EET-6424') {
+                logger.info(`- Voorganger ${predecessorKey} zit in sprint 100, dus EET-6424 gaat ook naar sprint 100`);
+            }
+            return '100';
+        }
+    }
+
+    // Haal de due date van het issue op
+    const dueDate = issue.fields?.duedate ? new Date(issue.fields?.duedate) : null;
+    const currentDate = new Date();
+
+    // Als het issue een due date heeft, vind eerst de sprint waar de due date in valt
+    let dueDateSprintIndex = -1;
+    if (dueDate) {
+        if (issue.key === 'EET-6424') {
+            logger.info(`\nZoeken naar sprint voor due date ${dueDate.toISOString()}:`);
+        }
+        for (let i = 0; i < sprintNames.length; i++) {
+            const sprintName = sprintNames[i];
+            const sprint = planningResult.sprints.find(s => s.sprint === sprintName);
+            if (!sprint?.startDate) {
+                if (issue.key === 'EET-6424') {
+                    logger.info(`- Sprint ${sprintName} heeft geen startdatum`);
+                }
+                continue;
+            }
+            const sprintStartDate = new Date(sprint.startDate);
+            const sprintEndDate = new Date(sprintStartDate);
+            sprintEndDate.setDate(sprintStartDate.getDate() + 14); // Sprint duurt 2 weken
+
+            if (issue.key === 'EET-6424') {
+                logger.info(`- Controleer sprint ${sprintName}:`);
+                logger.info(`  * Start: ${sprintStartDate.toISOString()}`);
+                logger.info(`  * Eind: ${sprintEndDate.toISOString()}`);
+                logger.info(`  * Due date: ${dueDate.toISOString()}`);
+            }
+
+            // Als de due date in deze sprint valt, onthoud deze sprint index
+            if (dueDate >= sprintStartDate && dueDate <= sprintEndDate) {
+                dueDateSprintIndex = i;
+                if (issue.key === 'EET-6424') {
+                    logger.info(`- Due date valt in sprint ${sprintName} (index ${i})`);
+                }
+                break;
+            } else if (issue.key === 'EET-6424') {
+                logger.info(`- Due date valt NIET in deze sprint`);
+            }
+        }
+    }
+
+    // Vind de sprint van de laatste voorganger
     let lastPredecessorSprintIndex = -1;
 
     for (const predecessorKey of predecessors) {
         const predecessor = planningResult.plannedIssues.find(pi => pi.issue.key === predecessorKey);
         if (predecessor) {
-            // Als een voorganger in sprint 100 zit, moet dit issue ook in sprint 100
-            if (predecessor.sprint === '100') {
-                return '100';
-            }
             const predecessorSprintIndex = sprintNames.indexOf(predecessor.sprint);
             if (predecessorSprintIndex > lastPredecessorSprintIndex) {
                 lastPredecessorSprintIndex = predecessorSprintIndex;
+                if (issue.key === 'EET-6424') {
+                    logger.info(`- Voorganger ${predecessorKey} zit in sprint ${predecessor.sprint} (index ${predecessorSprintIndex})`);
+                }
             }
         }
     }
 
-    // Begin vanaf de sprint na de laatste voorganger
-    let startFromIndex = Math.max(startIndex, lastPredecessorSprintIndex + 1);
-
-    // Controleer eerst of het issue überhaupt in een sprint past
-    if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
-        // Voor Peter en Unassigned, gebruik de hoogste sprint capaciteit
-        const maxSprintCapacity = Math.max(...planningResult.sprintCapacity
-            .filter(cap => cap.sprint !== '100')
-            .map(cap => cap.capacity));
-        
-        if (issueHours > maxSprintCapacity) {
-            return '100'; // Issue is te groot voor een enkele sprint
-        }
-    } else {
-        // Voor andere medewerkers, gebruik hun hoogste individuele capaciteit
-        const maxEmployeeCapacity = Math.max(...planningResult.sprintCapacity
-            .filter(cap => cap.sprint !== '100' && cap.employee === assignee)
-            .map(cap => cap.capacity));
-        
-        if (issueHours > maxEmployeeCapacity) {
-            return '100'; // Issue is te groot voor een enkele sprint
-        }
-    }
-
-    // Haal de due date van het issue op
-    const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate) : null;
-    const currentDate = new Date();
-
     // Als het issue een due date heeft die in het verleden ligt,
     // begin dan vanaf de huidige sprint
+    let startFromIndex = startIndex;
     if (dueDate && dueDate < currentDate) {
         const currentSprintIndex = sprintNames.indexOf(planningResult.currentSprint);
         if (currentSprintIndex !== -1) {
             startFromIndex = Math.max(startFromIndex, currentSprintIndex);
+            if (issue.key === 'EET-6424') {
+                logger.info(`- Due date ligt in het verleden, start vanaf huidige sprint ${planningResult.currentSprint} (index ${currentSprintIndex})`);
+            }
         }
     }
 
-    // Begin vanaf de opgegeven index
-    for (let i = startFromIndex; i < sprintNames.length; i++) {
-        const sprintName = sprintNames[i];
-        
-        // Als het issue een due date heeft, controleer of deze sprint de due date bevat
-        if (dueDate) {
-            const sprintStartDate = new Date(planningResult.sprints.find(s => s.sprint === sprintName)?.startDate || '');
-            const sprintEndDate = new Date(sprintStartDate);
-            sprintEndDate.setDate(sprintStartDate.getDate() + 14); // Sprint duurt 2 weken
+    // Bepaal de hoogste sprint van de due date en de sprint na de laatste voorganger
+    const highestSprintIndex = Math.max(
+        dueDateSprintIndex !== -1 ? dueDateSprintIndex : -1,
+        lastPredecessorSprintIndex !== -1 ? lastPredecessorSprintIndex + 1 : -1
+    );
 
-            // Als de due date na deze sprint ligt, probeer de volgende sprint
-            if (dueDate > sprintEndDate) {
-                continue;
+    // Als er een hoogste sprint is gevonden, gebruik die als startpunt
+    if (highestSprintIndex !== -1) {
+        startFromIndex = Math.max(startFromIndex, highestSprintIndex);
+        if (issue.key === 'EET-6424') {
+            logger.info(`- Hoogste sprint index: ${highestSprintIndex} (van due date: ${dueDateSprintIndex}, van voorgangers: ${lastPredecessorSprintIndex + 1})`);
+            logger.info(`- Start vanaf index: ${startFromIndex}`);
+        }
+    }
+    
+    // Als het issue een due date heeft, zoek eerst in de sprint waar de due date in valt
+    if (dueDateSprintIndex !== -1) {
+        const sprintName = sprintNames[dueDateSprintIndex];
+        
+        // Controleer of er opvolgers zijn die al gepland zijn in deze sprint of eerder
+        const successors = getSuccessors(issue);
+        let canPlaceInSprint = true;
+        for (const successorKey of successors) {
+            const successor = planningResult.plannedIssues.find(pi => pi.issue.key === successorKey);
+            if (successor) {
+                const successorSprintIndex = sprintNames.indexOf(successor.sprint);
+                if (successorSprintIndex <= dueDateSprintIndex) {
+                    canPlaceInSprint = false;
+                    if (issue.key === 'EET-6424') {
+                        logger.info(`- Kan niet in sprint ${sprintName} omdat opvolger ${successorKey} in sprint ${successor.sprint} zit`);
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (canPlaceInSprint) {
+            // Voor Peter van Diermen en Unassigned, gebruik de totale sprint capaciteit
+            if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
+                const totalCapacity = planningResult.sprintCapacity
+                    .filter(cap => cap.sprint === sprintName)
+                    .reduce((sum, cap) => sum + cap.capacity, 0);
+
+                const usedHours = Object.values(planningResult.employeeSprintUsedHours)
+                    .reduce((sum, sprintData) => sum + (sprintData[sprintName] || 0), 0);
+
+                const availableCapacity = totalCapacity - usedHours;
+
+                if (availableCapacity >= issueHours) {
+                    if (issue.key === 'EET-6424') {
+                        logger.info(`- Plaatst in sprint ${sprintName} (due date sprint) met ${availableCapacity} uren beschikbaar`);
+                    }
+                    return sprintName;
+                } else if (issue.key === 'EET-6424') {
+                    logger.info(`- Kan niet in sprint ${sprintName} (due date sprint) omdat er maar ${availableCapacity} uren beschikbaar zijn (${issueHours} uren nodig)`);
+                }
+            } else {
+                const totalCapacity = planningResult.sprintCapacity
+                    .filter(cap => cap.sprint === sprintName && cap.employee === assignee)
+                    .reduce((sum, cap) => sum + cap.capacity, 0);
+
+                const usedHours = planningResult.employeeSprintUsedHours[assignee]?.[sprintName] || 0;
+                const availableCapacity = totalCapacity - usedHours;
+
+                if (availableCapacity >= issueHours) {
+                    if (issue.key === 'EET-6424') {
+                        logger.info(`- Plaatst in sprint ${sprintName} (due date sprint) met ${availableCapacity} uren beschikbaar voor ${assignee}`);
+                    }
+                    return sprintName;
+                } else if (issue.key === 'EET-6424') {
+                    logger.info(`- Kan niet in sprint ${sprintName} (due date sprint) omdat er maar ${availableCapacity} uren beschikbaar zijn voor ${assignee} (${issueHours} uren nodig)`);
+                }
             }
         }
         
-        // Voor Peter van Diermen en Unassigned, gebruik de totale sprint capaciteit
-        if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
-            // Bereken totale sprint capaciteit
-            const totalCapacity = planningResult.sprintCapacity
-                .filter(cap => cap.sprint === sprintName)
-                .reduce((sum, cap) => sum + cap.capacity, 0);
-
-            // Bereken totaal gebruikte uren in de sprint
-            const usedHours = Object.values(planningResult.employeeSprintUsedHours)
-                .reduce((sum, sprintData) => sum + (sprintData[sprintName] || 0), 0);
-
-            const availableCapacity = totalCapacity - usedHours;
-
-            // Als er voldoende capaciteit is
-            if (availableCapacity >= issueHours) {
-                return sprintName;
+        // Als er geen capaciteit is in de sprint waar de due date in valt,
+        // of als er opvolgers zijn die al gepland zijn in deze sprint of eerder,
+        // zoek dan in latere sprints
+        for (let i = dueDateSprintIndex + 1; i < sprintNames.length; i++) {
+            const sprintName = sprintNames[i];
+            
+            // Controleer of er opvolgers zijn die al gepland zijn in deze sprint of eerder
+            let canPlaceInSprint = true;
+            for (const successorKey of successors) {
+                const successor = planningResult.plannedIssues.find(pi => pi.issue.key === successorKey);
+                if (successor) {
+                    const successorSprintIndex = sprintNames.indexOf(successor.sprint);
+                    if (successorSprintIndex <= i) {
+                        canPlaceInSprint = false;
+                        if (issue.key === 'EET-6424') {
+                            logger.info(`- Kan niet in sprint ${sprintName} omdat opvolger ${successorKey} in sprint ${successor.sprint} zit`);
+                        }
+                        break;
+                    }
+                }
             }
-        } else {
-            // Voor andere medewerkers, gebruik hun individuele capaciteit
-            const totalCapacity = planningResult.sprintCapacity
-                .filter(cap => cap.sprint === sprintName && cap.employee === assignee)
-                .reduce((sum, cap) => sum + cap.capacity, 0);
 
-            const usedHours = planningResult.employeeSprintUsedHours[assignee]?.[sprintName] || 0;
-            const availableCapacity = totalCapacity - usedHours;
+            if (canPlaceInSprint) {
+                if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
+                    const totalCapacity = planningResult.sprintCapacity
+                        .filter(cap => cap.sprint === sprintName)
+                        .reduce((sum, cap) => sum + cap.capacity, 0);
 
-            // Als er voldoende capaciteit is
-            if (availableCapacity >= issueHours) {
-                return sprintName;
+                    const usedHours = Object.values(planningResult.employeeSprintUsedHours)
+                        .reduce((sum, sprintData) => sum + (sprintData[sprintName] || 0), 0);
+
+                    const availableCapacity = totalCapacity - usedHours;
+
+                    if (availableCapacity >= issueHours) {
+                        if (issue.key === 'EET-6424') {
+                            logger.info(`- Plaatst in sprint ${sprintName} met ${availableCapacity} uren beschikbaar`);
+                        }
+                        return sprintName;
+                    } else if (issue.key === 'EET-6424') {
+                        logger.info(`- Kan niet in sprint ${sprintName} omdat er maar ${availableCapacity} uren beschikbaar zijn (${issueHours} uren nodig)`);
+                    }
+                } else {
+                    const totalCapacity = planningResult.sprintCapacity
+                        .filter(cap => cap.sprint === sprintName && cap.employee === assignee)
+                        .reduce((sum, cap) => sum + cap.capacity, 0);
+
+                    const usedHours = planningResult.employeeSprintUsedHours[assignee]?.[sprintName] || 0;
+                    const availableCapacity = totalCapacity - usedHours;
+
+                    if (availableCapacity >= issueHours) {
+                        if (issue.key === 'EET-6424') {
+                            logger.info(`- Plaatst in sprint ${sprintName} met ${availableCapacity} uren beschikbaar voor ${assignee}`);
+                        }
+                        return sprintName;
+                    } else if (issue.key === 'EET-6424') {
+                        logger.info(`- Kan niet in sprint ${sprintName} omdat er maar ${availableCapacity} uren beschikbaar zijn voor ${assignee} (${issueHours} uren nodig)`);
+                    }
+                }
+            }
+        }
+    } else {
+        // Als het issue geen due date heeft, zoek vanaf de opgegeven index
+        for (let i = startFromIndex; i < sprintNames.length; i++) {
+            const sprintName = sprintNames[i];
+            
+            // Controleer of er opvolgers zijn die al gepland zijn in deze sprint of eerder
+            const successors = getSuccessors(issue);
+            let canPlaceInSprint = true;
+            for (const successorKey of successors) {
+                const successor = planningResult.plannedIssues.find(pi => pi.issue.key === successorKey);
+                if (successor) {
+                    const successorSprintIndex = sprintNames.indexOf(successor.sprint);
+                    if (successorSprintIndex <= i) {
+                        canPlaceInSprint = false;
+                        if (issue.key === 'EET-6424') {
+                            logger.info(`- Kan niet in sprint ${sprintName} omdat opvolger ${successorKey} in sprint ${successor.sprint} zit`);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (canPlaceInSprint) {
+                if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
+                    const totalCapacity = planningResult.sprintCapacity
+                        .filter(cap => cap.sprint === sprintName)
+                        .reduce((sum, cap) => sum + cap.capacity, 0);
+
+                    const usedHours = Object.values(planningResult.employeeSprintUsedHours)
+                        .reduce((sum, sprintData) => sum + (sprintData[sprintName] || 0), 0);
+
+                    const availableCapacity = totalCapacity - usedHours;
+
+                    if (availableCapacity >= issueHours) {
+                        if (issue.key === 'EET-6424') {
+                            logger.info(`- Plaatst in sprint ${sprintName} met ${availableCapacity} uren beschikbaar`);
+                        }
+                        return sprintName;
+                    } else if (issue.key === 'EET-6424') {
+                        logger.info(`- Kan niet in sprint ${sprintName} omdat er maar ${availableCapacity} uren beschikbaar zijn (${issueHours} uren nodig)`);
+                    }
+                } else {
+                    const totalCapacity = planningResult.sprintCapacity
+                        .filter(cap => cap.sprint === sprintName && cap.employee === assignee)
+                        .reduce((sum, cap) => sum + cap.capacity, 0);
+
+                    const usedHours = planningResult.employeeSprintUsedHours[assignee]?.[sprintName] || 0;
+                    const availableCapacity = totalCapacity - usedHours;
+
+                    if (availableCapacity >= issueHours) {
+                        if (issue.key === 'EET-6424') {
+                            logger.info(`- Plaatst in sprint ${sprintName} met ${availableCapacity} uren beschikbaar voor ${assignee}`);
+                        }
+                        return sprintName;
+                    } else if (issue.key === 'EET-6424') {
+                        logger.info(`- Kan niet in sprint ${sprintName} omdat er maar ${availableCapacity} uren beschikbaar zijn voor ${assignee} (${issueHours} uren nodig)`);
+                    }
+                }
             }
         }
     }
 
     // Als we hier komen, betekent dit dat er geen sprint is met voldoende capaciteit
     // In dit geval moeten we de laatste sprint gebruiken
+    if (issue.key === 'EET-6424') {
+        logger.info(`- Geen sprint gevonden met voldoende capaciteit, gebruikt laatste sprint ${sprintNames[sprintNames.length - 1]}`);
+    }
     return sprintNames[sprintNames.length - 1];
 }
 

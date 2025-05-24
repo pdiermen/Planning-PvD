@@ -17,7 +17,7 @@ import { getGoogleSheetsData } from './google-sheets.js';
 import { getSprintCapacity } from './jira.js';
 import path from 'path';
 import { findFirstAvailableSprint } from './services/planning.js';
-import { calculatePlanning } from './services/planning.js';
+import { calculatePlanning, STATUS_ORDER } from './services/planning.js';
 import { generateSprintHoursTable } from './utils/html-generators.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -454,26 +454,13 @@ function formatTime(seconds: number | undefined): string {
 
 // Functie om issues te sorteren volgens de gewenste volgorde
 function sortIssues(issues: JiraIssue[], planning: PlanningResult): JiraIssue[] {
-    // Definieer de volgorde van statussen
-    const statusOrder: Record<string, number> = {
-        'Resolved': 0,
-        'In Review': 1,
-        'Ready for testing': 2,
-        'Open': 3,
-        'Reopended': 4,
-        'Reopend': 5,
-        'Registered': 5,
-        'Waiting': 6,
-        'Testing': 7
-    };
-
     // Definieer de volgorde van prioriteiten
     const priorityOrder: Record<string, number> = {
         'Highest': 0,
         'High': 1,
         'Medium': 2,
         'Low': 3,
-        'Lowest': 4
+        'Extremely Low': 4
     };
 
     return [...issues].sort((a, b) => {
@@ -495,7 +482,7 @@ function sortIssues(issues: JiraIssue[], planning: PlanningResult): JiraIssue[] 
         // Vergelijk statussen
         const statusA = a.fields?.status?.name || '';
         const statusB = b.fields?.status?.name || '';
-        const statusCompare = (statusOrder[statusA] || 999) - (statusOrder[statusB] || 999);
+        const statusCompare = (STATUS_ORDER[statusA] || 999) - (STATUS_ORDER[statusB] || 999);
         if (statusCompare !== 0) return statusCompare;
 
         // Vergelijk prioriteiten
@@ -866,18 +853,42 @@ function generateIssuesTable(issues: JiraIssue[], planning: PlanningResult, spri
                         // Format due date
                         const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate).toLocaleDateString('nl-NL') : '-';
                         
+                        // Controleer of de due date voor de sprint startdatum ligt
+                        let isOverdue = false;
+                        if (issue.fields?.duedate && plannedIssue) {
+                            const dueDateObj = new Date(issue.fields.duedate);
+                            const sprintStartDate = new Date(planning.sprints.find(s => s.sprint === plannedIssue.sprint)?.startDate || '');
+                            
+                            // Controleer of beide datums geldig zijn
+                            if (!isNaN(dueDateObj.getTime()) && !isNaN(sprintStartDate.getTime())) {
+                                // Vergelijk alleen de datums (zonder tijd)
+                                const dueDateOnly = new Date(dueDateObj.getFullYear(), dueDateObj.getMonth(), dueDateObj.getDate());
+                                const sprintStartDateOnly = new Date(sprintStartDate.getFullYear(), sprintStartDate.getMonth(), sprintStartDate.getDate());
+                                isOverdue = dueDateOnly < sprintStartDateOnly;
+                                
+                                // Debug logging
+                                logger.info(`\nDue date check voor issue ${issue.key}:`);
+                                logger.info(`- Due date: ${dueDateOnly.toLocaleDateString('nl-NL')}`);
+                                logger.info(`- Sprint start date: ${sprintStartDateOnly.toLocaleDateString('nl-NL')}`);
+                                logger.info(`- Is overdue: ${isOverdue}`);
+                            }
+                        }
+                        
+                        // Voeg text-danger class toe als het issue over tijd is
+                        const textClass = isOverdue ? 'text-danger' : '';
+                        
                         return `
                             <tr class="${isPlanned ? 'table-success' : ''}">
-                                <td><a href="https://deventit.atlassian.net/browse/${issue.key}" target="_blank" class="text-decoration-none">${issue.key}</a></td>
-                                <td>${issue.fields?.summary}</td>
-                                <td>${issue.fields?.status?.name}</td>
-                                <td>${issue.fields?.priority?.name || 'Lowest'}</td>
-                                <td>${getAssigneeName(issue.fields?.assignee)}</td>
-                                <td>${hours}</td>
-                                <td>${sprintName}</td>
-                                <td>${predecessorsHtml}</td>
-                                <td>${successorsHtml}</td>
-                                <td>${dueDate}</td>
+                                <td class="${textClass}"><a href="https://deventit.atlassian.net/browse/${issue.key}" target="_blank" class="text-decoration-none">${issue.key}</a></td>
+                                <td class="${textClass}">${issue.fields?.summary}</td>
+                                <td class="${textClass}">${issue.fields?.status?.name}</td>
+                                <td class="${textClass}">${issue.fields?.priority?.name || 'Lowest'}</td>
+                                <td class="${textClass}">${getAssigneeName(issue.fields?.assignee)}</td>
+                                <td class="${textClass}">${hours}</td>
+                                <td class="${textClass}">${sprintName}</td>
+                                <td class="${textClass}">${predecessorsHtml}</td>
+                                <td class="${textClass}">${successorsHtml}</td>
+                                <td class="${textClass}">${dueDate}</td>
                             </tr>
                         `;
                     }).join('')}

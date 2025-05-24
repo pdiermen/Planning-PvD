@@ -171,8 +171,9 @@ export interface SprintCapacity {
     sprint: string;
     employee: string;
     capacity: number;
-    project: string;
     availableCapacity: number;
+    project: string;
+    startDate?: string;
 }
 
 export interface PlanningResult {

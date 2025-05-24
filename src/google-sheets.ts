@@ -279,11 +279,6 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
         const effectiveHoursStr = row[effectiveHoursIndex];
         const projectsStr = row[projectIndex];
 
-        // Debug logging voor elke rij
-        logger.info(`\nVerwerken rij ${i}:`);
-        logger.info(`- Naam: ${employeeName}`);
-        logger.info(`- Effectieve uren: ${effectiveHoursStr}`);
-        logger.info(`- Project: ${projectsStr}`);
 
         // Controleer of we geldige data hebben
         if (!employeeName || !effectiveHoursStr) {
@@ -312,7 +307,8 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                     sprint: sprintNumber.toString(),
                     capacity: effectiveHours * 2, // 2 weken per sprint
                     project: '',
-                    availableCapacity: effectiveHours * 2 // Standaard gelijk aan de volledige capaciteit
+                    availableCapacity: effectiveHours * 2, // Standaard gelijk aan de volledige capaciteit
+                    startDate: undefined
                 });
             } else {
                 projects.forEach(project => {
@@ -350,15 +346,25 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                             logger.info(`- Capaciteitsfactor: ${capacityFactor}`);
                             logger.info(`- Aangepaste capaciteit: ${capacity}`);
                         }
-                    }
 
-                    sprintCapacities.push({
-                        employee: employeeName,
-                        sprint: sprintNumber.toString(),
-                        capacity: capacity,
-                        project: project,
-                        availableCapacity: availableCapacity
-                    });
+                        sprintCapacities.push({
+                            employee: employeeName,
+                            sprint: sprintNumber.toString(),
+                            capacity: capacity,
+                            project: project,
+                            availableCapacity: availableCapacity,
+                            startDate: sprintStart.toISOString()
+                        });
+                    } else {
+                        sprintCapacities.push({
+                            employee: employeeName,
+                            sprint: sprintNumber.toString(),
+                            capacity: capacity,
+                            project: project,
+                            availableCapacity: availableCapacity,
+                            startDate: undefined
+                        });
+                    }
                 });
             }
         }
