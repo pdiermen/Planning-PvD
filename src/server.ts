@@ -842,10 +842,10 @@ function generateIssuesTable(issues: JiraIssue[], planning: PlanningResult, spri
                             : 'Geen';
                         
                         const plannedIssue = planning.plannedIssues?.find(pi => pi.issue.key === issue.key);
-                        const sprintName = plannedIssue ? sprintNames.get(plannedIssue.sprint) || plannedIssue.sprint : 'Niet gepland';
+                        const sprintName = plannedIssue ? sprintNames.get(plannedIssue.sprint) || plannedIssue.sprint : '100';
                         
-                        // Markeer issues in sprint 10 als niet ingepland
-                        const isPlanned = plannedIssue && plannedIssue.sprint !== '10';
+                        // Een issue is gepland als het een plannedIssue heeft
+                        const isPlanned = !!plannedIssue;
                         
                         // Bereken uren met 1 decimaal
                         const hours = ((issue.fields?.timeestimate || 0) / 3600).toFixed(1);

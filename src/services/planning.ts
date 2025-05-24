@@ -284,19 +284,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
     const assignee = getAssigneeName(issue.fields?.assignee);
     if (!assignee) return '100'; // Fallback sprint als er geen assignee is
 
-    // Extra logging voor EET-6424
-    if (issue.key === 'EET-6424') {
-        logger.info(`\nAnalyse van EET-6424:`);
-        logger.info(`- Due date: ${issue.fields?.duedate}`);
-        logger.info(`- Assignee: ${assignee}`);
-        logger.info(`- Start index: ${startIndex}`);
-        logger.info(`- Aantal sprints: ${planningResult.sprints.length}`);
-        logger.info(`- Sprint data:`);
-        planningResult.sprints.forEach(sprint => {
-            logger.info(`  * Sprint ${sprint.sprint}: ${sprint.startDate}`);
-        });
-    }
-
     const issueHours = (issue.fields?.timeestimate || 0) / 3600;
     const sprintNames = [...new Set(planningResult.sprintCapacity.map(cap => cap.sprint))]
         .sort((a, b) => parseInt(a) - parseInt(b));
@@ -306,9 +293,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
     for (const predecessorKey of predecessors) {
         const predecessor = planningResult.plannedIssues.find(pi => pi.issue.key === predecessorKey);
         if (predecessor && predecessor.sprint === '100') {
-            if (issue.key === 'EET-6424') {
-                logger.info(`- Voorganger ${predecessorKey} zit in sprint 100, dus EET-6424 gaat ook naar sprint 100`);
-            }
             return '100';
         }
     }
@@ -320,38 +304,19 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
     // Als het issue een due date heeft, vind eerst de sprint waar de due date in valt
     let dueDateSprintIndex = -1;
     if (dueDate) {
-        if (issue.key === 'EET-6424') {
-            logger.info(`\nZoeken naar sprint voor due date ${dueDate.toISOString()}:`);
-        }
         for (let i = 0; i < sprintNames.length; i++) {
             const sprintName = sprintNames[i];
             const sprint = planningResult.sprints.find(s => s.sprint === sprintName);
-            if (!sprint?.startDate) {
-                if (issue.key === 'EET-6424') {
-                    logger.info(`- Sprint ${sprintName} heeft geen startdatum`);
-                }
-                continue;
-            }
+            if (!sprint?.startDate) continue;
+            
             const sprintStartDate = new Date(sprint.startDate);
             const sprintEndDate = new Date(sprintStartDate);
             sprintEndDate.setDate(sprintStartDate.getDate() + 14); // Sprint duurt 2 weken
 
-            if (issue.key === 'EET-6424') {
-                logger.info(`- Controleer sprint ${sprintName}:`);
-                logger.info(`  * Start: ${sprintStartDate.toISOString()}`);
-                logger.info(`  * Eind: ${sprintEndDate.toISOString()}`);
-                logger.info(`  * Due date: ${dueDate.toISOString()}`);
-            }
-
             // Als de due date in deze sprint valt, onthoud deze sprint index
             if (dueDate >= sprintStartDate && dueDate <= sprintEndDate) {
                 dueDateSprintIndex = i;
-                if (issue.key === 'EET-6424') {
-                    logger.info(`- Due date valt in sprint ${sprintName} (index ${i})`);
-                }
                 break;
-            } else if (issue.key === 'EET-6424') {
-                logger.info(`- Due date valt NIET in deze sprint`);
             }
         }
     }
@@ -365,9 +330,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
             const predecessorSprintIndex = sprintNames.indexOf(predecessor.sprint);
             if (predecessorSprintIndex > lastPredecessorSprintIndex) {
                 lastPredecessorSprintIndex = predecessorSprintIndex;
-                if (issue.key === 'EET-6424') {
-                    logger.info(`- Voorganger ${predecessorKey} zit in sprint ${predecessor.sprint} (index ${predecessorSprintIndex})`);
-                }
             }
         }
     }
@@ -379,9 +341,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
         const currentSprintIndex = sprintNames.indexOf(planningResult.currentSprint);
         if (currentSprintIndex !== -1) {
             startFromIndex = Math.max(startFromIndex, currentSprintIndex);
-            if (issue.key === 'EET-6424') {
-                logger.info(`- Due date ligt in het verleden, start vanaf huidige sprint ${planningResult.currentSprint} (index ${currentSprintIndex})`);
-            }
         }
     }
 
@@ -394,10 +353,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
     // Als er een hoogste sprint is gevonden, gebruik die als startpunt
     if (highestSprintIndex !== -1) {
         startFromIndex = Math.max(startFromIndex, highestSprintIndex);
-        if (issue.key === 'EET-6424') {
-            logger.info(`- Hoogste sprint index: ${highestSprintIndex} (van due date: ${dueDateSprintIndex}, van voorgangers: ${lastPredecessorSprintIndex + 1})`);
-            logger.info(`- Start vanaf index: ${startFromIndex}`);
-        }
     }
     
     // Als het issue een due date heeft, zoek eerst in de sprint waar de due date in valt
@@ -413,9 +368,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                 const successorSprintIndex = sprintNames.indexOf(successor.sprint);
                 if (successorSprintIndex <= dueDateSprintIndex) {
                     canPlaceInSprint = false;
-                    if (issue.key === 'EET-6424') {
-                        logger.info(`- Kan niet in sprint ${sprintName} omdat opvolger ${successorKey} in sprint ${successor.sprint} zit`);
-                    }
                     break;
                 }
             }
@@ -434,12 +386,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                 const availableCapacity = totalCapacity - usedHours;
 
                 if (availableCapacity >= issueHours) {
-                    if (issue.key === 'EET-6424') {
-                        logger.info(`- Plaatst in sprint ${sprintName} (due date sprint) met ${availableCapacity} uren beschikbaar`);
-                    }
                     return sprintName;
-                } else if (issue.key === 'EET-6424') {
-                    logger.info(`- Kan niet in sprint ${sprintName} (due date sprint) omdat er maar ${availableCapacity} uren beschikbaar zijn (${issueHours} uren nodig)`);
                 }
             } else {
                 const totalCapacity = planningResult.sprintCapacity
@@ -450,12 +397,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                 const availableCapacity = totalCapacity - usedHours;
 
                 if (availableCapacity >= issueHours) {
-                    if (issue.key === 'EET-6424') {
-                        logger.info(`- Plaatst in sprint ${sprintName} (due date sprint) met ${availableCapacity} uren beschikbaar voor ${assignee}`);
-                    }
                     return sprintName;
-                } else if (issue.key === 'EET-6424') {
-                    logger.info(`- Kan niet in sprint ${sprintName} (due date sprint) omdat er maar ${availableCapacity} uren beschikbaar zijn voor ${assignee} (${issueHours} uren nodig)`);
                 }
             }
         }
@@ -474,9 +416,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                     const successorSprintIndex = sprintNames.indexOf(successor.sprint);
                     if (successorSprintIndex <= i) {
                         canPlaceInSprint = false;
-                        if (issue.key === 'EET-6424') {
-                            logger.info(`- Kan niet in sprint ${sprintName} omdat opvolger ${successorKey} in sprint ${successor.sprint} zit`);
-                        }
                         break;
                     }
                 }
@@ -494,12 +433,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                     const availableCapacity = totalCapacity - usedHours;
 
                     if (availableCapacity >= issueHours) {
-                        if (issue.key === 'EET-6424') {
-                            logger.info(`- Plaatst in sprint ${sprintName} met ${availableCapacity} uren beschikbaar`);
-                        }
                         return sprintName;
-                    } else if (issue.key === 'EET-6424') {
-                        logger.info(`- Kan niet in sprint ${sprintName} omdat er maar ${availableCapacity} uren beschikbaar zijn (${issueHours} uren nodig)`);
                     }
                 } else {
                     const totalCapacity = planningResult.sprintCapacity
@@ -510,12 +444,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                     const availableCapacity = totalCapacity - usedHours;
 
                     if (availableCapacity >= issueHours) {
-                        if (issue.key === 'EET-6424') {
-                            logger.info(`- Plaatst in sprint ${sprintName} met ${availableCapacity} uren beschikbaar voor ${assignee}`);
-                        }
                         return sprintName;
-                    } else if (issue.key === 'EET-6424') {
-                        logger.info(`- Kan niet in sprint ${sprintName} omdat er maar ${availableCapacity} uren beschikbaar zijn voor ${assignee} (${issueHours} uren nodig)`);
                     }
                 }
             }
@@ -534,9 +463,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                     const successorSprintIndex = sprintNames.indexOf(successor.sprint);
                     if (successorSprintIndex <= i) {
                         canPlaceInSprint = false;
-                        if (issue.key === 'EET-6424') {
-                            logger.info(`- Kan niet in sprint ${sprintName} omdat opvolger ${successorKey} in sprint ${successor.sprint} zit`);
-                        }
                         break;
                     }
                 }
@@ -554,12 +480,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                     const availableCapacity = totalCapacity - usedHours;
 
                     if (availableCapacity >= issueHours) {
-                        if (issue.key === 'EET-6424') {
-                            logger.info(`- Plaatst in sprint ${sprintName} met ${availableCapacity} uren beschikbaar`);
-                        }
                         return sprintName;
-                    } else if (issue.key === 'EET-6424') {
-                        logger.info(`- Kan niet in sprint ${sprintName} omdat er maar ${availableCapacity} uren beschikbaar zijn (${issueHours} uren nodig)`);
                     }
                 } else {
                     const totalCapacity = planningResult.sprintCapacity
@@ -570,12 +491,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                     const availableCapacity = totalCapacity - usedHours;
 
                     if (availableCapacity >= issueHours) {
-                        if (issue.key === 'EET-6424') {
-                            logger.info(`- Plaatst in sprint ${sprintName} met ${availableCapacity} uren beschikbaar voor ${assignee}`);
-                        }
                         return sprintName;
-                    } else if (issue.key === 'EET-6424') {
-                        logger.info(`- Kan niet in sprint ${sprintName} omdat er maar ${availableCapacity} uren beschikbaar zijn voor ${assignee} (${issueHours} uren nodig)`);
                     }
                 }
             }
@@ -584,9 +500,6 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
 
     // Als we hier komen, betekent dit dat er geen sprint is met voldoende capaciteit
     // In dit geval moeten we de laatste sprint gebruiken
-    if (issue.key === 'EET-6424') {
-        logger.info(`- Geen sprint gevonden met voldoende capaciteit, gebruikt laatste sprint ${sprintNames[sprintNames.length - 1]}`);
-    }
     return sprintNames[sprintNames.length - 1];
 }
 
