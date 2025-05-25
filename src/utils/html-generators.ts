@@ -112,13 +112,29 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
                 sprintTotalRemaining += data.remaining;
                 sprintTotalIssues += plannedIssues.length;
 
+                // Format de geplande issues met rode tekst voor issues die te laat zijn ingepland
+                const formattedIssues = plannedIssues.map(pi => {
+                    const issueDueDate = pi.issue.fields?.duedate ? new Date(pi.issue.fields.duedate) : null;
+                    
+                    // Vind de sprint informatie voor dit issue
+                    const sprintInfo = planning.sprints.find(s => s.sprint === sprint);
+                    const sprintStartDate = sprintInfo?.startDate ? new Date(sprintInfo.startDate) : null;
+                    
+                    // Een issue is te laat als de due date vóór de sprint startdatum ligt
+                    const isOverdue = issueDueDate && sprintStartDate && issueDueDate < sprintStartDate;
+                    const issueText = `${pi.issue.key} (${pi.hours.toFixed(1)} uur)`;
+                    
+                    // Gebruik een span met alleen rode kleur
+                    return isOverdue ? `<span style="color: red !important;">${issueText}</span>` : issueText;
+                }).join('<br>');
+
                 html += `
                     <tr>
                         <td style="width: 10%;">${sprint}</td>
                         <td style="width: 15%;">${employee}</td>
                         <td style="width: 15%; text-align: center;">${data.available.toFixed(1)}</td>
                         <td style="width: 15%; text-align: center;">${data.planned.toFixed(1)}</td>
-                        <td style="width: 35%;">${plannedIssues.map(pi => `${pi.issue.key} (${pi.hours.toFixed(1)} uur)`).join('<br>')}</td>
+                        <td style="width: 35%;">${formattedIssues}</td>
                         <td style="width: 10%; text-align: center;">${data.remaining.toFixed(1)}</td>
                     </tr>
                 `;
