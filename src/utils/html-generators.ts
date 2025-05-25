@@ -82,8 +82,15 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
         }
     }
 
-    let html = '<table class="table table-striped table-bordered">';
-    html += '<thead><tr class="table-dark text-dark"><th>Sprint</th><th>Medewerker</th><th>Effectieve uren</th><th>Geplande uren</th><th>Geplande issues</th><th>Resterende tijd</th></tr></thead><tbody>';
+    let html = '<table class="table table-striped table-bordered" style="width: 100%;">';
+    html += '<thead><tr class="table-dark text-dark">';
+    html += '<th style="width: 10%;">Sprint</th>';
+    html += '<th style="width: 15%;">Medewerker</th>';
+    html += '<th style="width: 15%; text-align: center;">Effectieve uren</th>';
+    html += '<th style="width: 15%; text-align: center;">Geplande uren</th>';
+    html += '<th style="width: 35%;">Geplande issues</th>';
+    html += '<th style="width: 10%; text-align: center;">Resterende tijd</th>';
+    html += '</tr></thead><tbody>';
 
     for (const sprint of availableSprintNames) {
         let sprintTotalAvailable = 0;
@@ -107,12 +114,12 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
 
                 html += `
                     <tr>
-                        <td>${sprint}</td>
-                        <td>${employee}</td>
-                        <td>${data.available.toFixed(1)}</td>
-                        <td>${data.planned.toFixed(1)}</td>
-                        <td>${plannedIssues.map(pi => `${pi.issue.key} (${pi.hours.toFixed(1)} uur)`).join('<br>')}</td>
-                        <td>${data.remaining.toFixed(1)}</td>
+                        <td style="width: 10%;">${sprint}</td>
+                        <td style="width: 15%;">${employee}</td>
+                        <td style="width: 15%; text-align: center;">${data.available.toFixed(1)}</td>
+                        <td style="width: 15%; text-align: center;">${data.planned.toFixed(1)}</td>
+                        <td style="width: 35%;">${plannedIssues.map(pi => `${pi.issue.key} (${pi.hours.toFixed(1)} uur)`).join('<br>')}</td>
+                        <td style="width: 10%; text-align: center;">${data.remaining.toFixed(1)}</td>
                     </tr>
                 `;
             }
@@ -121,75 +128,14 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
         // Voeg totaalregel toe voor de sprint
         html += `
             <tr class="table-dark">
-                <td><strong>${sprint} Totaal</strong></td>
-                <td></td>
-                <td><strong>${sprintTotalAvailable.toFixed(1)}</strong></td>
-                <td><strong>${sprintTotalPlanned.toFixed(1)}</strong></td>
-                <td><strong>${sprintTotalIssues}</strong></td>
-                <td><strong>${sprintTotalRemaining.toFixed(1)}</strong></td>
+                <td style="width: 10%;"><strong>${sprint} Totaal</strong></td>
+                <td style="width: 15%;"></td>
+                <td style="width: 15%; text-align: center;"><strong>${sprintTotalAvailable.toFixed(1)}</strong></td>
+                <td style="width: 15%; text-align: center;"><strong>${sprintTotalPlanned.toFixed(1)}</strong></td>
+                <td style="width: 35%;"><strong>${sprintTotalIssues}</strong></td>
+                <td style="width: 10%; text-align: center;"><strong>${sprintTotalRemaining.toFixed(1)}</strong></td>
             </tr>
         `;
-    }
-
-    html += '</tbody></table>';
-    return html;
-}
-
-export function generateIssuesTable(issues: Issue[], planning: PlanningResult, sprintNames: Map<string, string>): string {
-    let html = '<table class="table table-striped">';
-    html += '<thead><tr><th>Key</th><th>Summary</th><th>Assignee</th><th>Sprint</th><th>Uren</th><th>Opvolgers</th><th>Status</th></tr></thead>';
-    html += '<tbody>';
-
-    for (const issue of issues) {
-        const plannedIssue = planning.plannedIssues.find(pi => pi.issue.key === issue.key);
-        const sprintName = plannedIssue ? sprintNames.get(plannedIssue.sprint) || plannedIssue.sprint : 'Unplanned';
-        const hours = (issue.fields?.timeestimate || 0) / 3600;
-        const assignee = typeof issue.fields?.assignee === 'object' ? issue.fields.assignee?.displayName : issue.fields?.assignee || 'Unassigned';
-        
-        // Haal opvolgers op via issuelinks
-        const successors = issue.fields?.issuelinks
-            ?.filter(link => 
-                (link.type.name === 'Blocks' || link.type.name === 'Depends On') && 
-                link.outwardIssue?.key === issue.key
-            )
-            .map(link => link.outwardIssue?.key)
-            .filter((key): key is string => key !== undefined) || [];
-
-        const successorIssues = successors.map(key => {
-            const successorIssue = issues.find(i => i.key === key);
-            const successorPlanned = planning.plannedIssues.find(pi => pi.issue.key === key);
-            const successorSprint = successorPlanned ? sprintNames.get(successorPlanned.sprint) || successorPlanned.sprint : 'Unplanned';
-            
-            // Controleer of opvolger in dezelfde sprint staat
-            const sameSprintWarning = successorPlanned && plannedIssue && successorPlanned.sprint === plannedIssue.sprint 
-                ? '<span class="badge bg-warning">Zelfde sprint als voorganger</span>' 
-                : '';
-            
-            return `<div>${key} (${successorSprint}) ${sameSprintWarning}</div>`;
-        }).join('');
-
-        // Bepaal status voor waarschuwingen
-        let statusHtml = '';
-        if (successors.length > 0) {
-            const hasSameSprintSuccessor = successors.some(key => {
-                const successorPlanned = planning.plannedIssues.find(pi => pi.issue.key === key);
-                return successorPlanned && plannedIssue && successorPlanned.sprint === plannedIssue.sprint;
-            });
-            
-            if (hasSameSprintSuccessor) {
-                statusHtml = '<span class="badge bg-warning">Opvolger inzelfde sprint</span>';
-            }
-        }
-
-        html += `<tr>
-            <td>${issue.key}</td>
-            <td>${issue.fields?.summary || ''}</td>
-            <td>${assignee}</td>
-            <td>${sprintName}</td>
-            <td>${hours.toFixed(1)}</td>
-            <td>${successorIssues || 'Geen'}</td>
-            <td>${statusHtml}</td>
-        </tr>`;
     }
 
     html += '</tbody></table>';
