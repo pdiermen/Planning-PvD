@@ -711,9 +711,6 @@ async function generateHtml(
                     <li class="nav-item">
                         <a href="/" class="nav-link active">Projecten</a>
                     </li>
-                    <li class="nav-item">
-                        <a href="/worklogs" class="nav-link">Worklogs & Efficiëntie</a>
-                    </li>
                 </ul>
             </nav>
             <div class="container-fluid mt-4">
@@ -1771,13 +1768,7 @@ app.get('/planning', async (req, res) => {
                     <a href="/" class="navbar-brand">Planning Dashboard</a>
                     <ul class="navbar-nav">
                         <li class="nav-item">
-                            <a href="/" class="nav-link">Projecten</a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="/worklogs" class="nav-link">Worklogs & Efficiëntie</a>
-                        </li>
-                        <li class="nav-item">
-                            <a href="/planning?project=${projectType}" class="nav-link active">Planning</a>
+                            <a href="/" class="nav-link active">Projecten</a>
                         </li>
                     </ul>
                 </nav>
