@@ -1412,21 +1412,21 @@ const styles = `
         border: 1px solid #ddd; 
         padding: 12px 15px; 
         text-align: left; 
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        overflow: visible;
+        white-space: normal;
+        word-wrap: break-word;
     }
     /* Dynamische kolombreedtes */
-    th:nth-child(1), td:nth-child(1) { width: 8%; } /* Issue */
-    th:nth-child(2), td:nth-child(2) { width: 25%; } /* Samenvatting */
-    th:nth-child(3), td:nth-child(3) { width: 8%; } /* Status */
-    th:nth-child(4), td:nth-child(4) { width: 8%; } /* Prioriteit */
-    th:nth-child(5), td:nth-child(5) { width: 10%; } /* Toegewezen aan */
-    th:nth-child(6), td:nth-child(6) { width: 6%; } /* Uren */
-    th:nth-child(7), td:nth-child(7) { width: 8%; } /* Sprint */
-    th:nth-child(8), td:nth-child(8) { width: 12%; } /* Voorgangers */
-    th:nth-child(9), td:nth-child(9) { width: 12%; } /* Opvolgers */
-    th:nth-child(10), td:nth-child(10) { width: 8%; } /* Due Date */
+    th:nth-child(1), td:nth-child(1) { width: 4%; } /* Issue */
+    th:nth-child(2), td:nth-child(2) { width: 20%; } /* Samenvatting */
+    th:nth-child(3), td:nth-child(3) { width: 4%; } /* Status */
+    th:nth-child(4), td:nth-child(4) { width: 4%; } /* Prioriteit */
+    th:nth-child(5), td:nth-child(5) { width: 8%; } /* Toegewezen aan */
+    th:nth-child(6), td:nth-child(6) { width: 4%; } /* Uren */
+    th:nth-child(7), td:nth-child(7) { width: 4%; } /* Sprint */
+    th:nth-child(8), td:nth-child(8) { width: 23%; } /* Voorgangers */
+    th:nth-child(9), td:nth-child(9) { width: 23%; } /* Opvolgers */
+    th:nth-child(10), td:nth-child(10) { width: 6%; } /* Due Date */
     th { 
         background-color: #f2f2f2; 
         font-weight: bold;
