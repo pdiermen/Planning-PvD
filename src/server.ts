@@ -690,6 +690,18 @@ async function generateHtml(
                 .table th { background-color: #f8f9fa; }
                 .planned { background-color: #d4edda; }
                 .unplanned { background-color: #f8d7da; }
+                .nav-tabs .nav-link.active {
+                    font-weight: bold;
+                    background-color: #fff;
+                    border-bottom-color: #fff;
+                }
+                .tab-content {
+                    padding: 20px;
+                    background-color: #fff;
+                    border: 1px solid #dee2e6;
+                    border-top: none;
+                    border-radius: 0 0 4px 4px;
+                }
             </style>
         </head>
         <body>
@@ -705,31 +717,66 @@ async function generateHtml(
                 </ul>
             </nav>
             <div class="container-fluid mt-4">
+                <ul class="nav nav-tabs" id="projectTabs" role="tablist">
     `;
 
-    // Genereer tabellen voor elk project
+    // Genereer tab headers voor elk project
+    let firstProject = true;
+    for (const [projectName, _] of projectIssues) {
+        const tabId = projectName.toLowerCase().replace(/\s+/g, '-');
+        html += `
+            <li class="nav-item" role="presentation">
+                <button class="nav-link ${firstProject ? 'active' : ''}" 
+                        id="${tabId}-tab" 
+                        data-bs-toggle="tab" 
+                        data-bs-target="#${tabId}" 
+                        type="button" 
+                        role="tab" 
+                        aria-controls="${tabId}" 
+                        aria-selected="${firstProject ? 'true' : 'false'}">
+                    ${projectName}
+                </button>
+            </li>
+        `;
+        firstProject = false;
+    }
+
+    html += `
+                </ul>
+                <div class="tab-content" id="projectTabsContent">
+    `;
+
+    // Genereer tab content voor elk project
+    firstProject = true;
     for (const [projectName, issues] of projectIssues) {
         const planning = projectPlanning.get(projectName);
         if (!planning) continue;
 
+        const tabId = projectName.toLowerCase().replace(/\s+/g, '-');
         html += `
-            <h2 class="mb-4">${projectName}</h2>
-            <div class="row mb-4">
-                <div class="col">
-                    <h4>Planning Tabel</h4>
-                    ${generateSprintHoursTable(planning, sprintNames)}
+            <div class="tab-pane fade ${firstProject ? 'show active' : ''}" 
+                 id="${tabId}" 
+                 role="tabpanel" 
+                 aria-labelledby="${tabId}-tab">
+                <div class="row mb-4">
+                    <div class="col">
+                        <h4>Planning Tabel</h4>
+                        ${generateSprintHoursTable(planning, sprintNames)}
+                    </div>
                 </div>
-            </div>
-            <div class="row mb-4">
-                <div class="col">
-                    <h4>Issues</h4>
-                    ${generateIssuesTable(issues, planning, sprintNames)}
+                <div class="row mb-4">
+                    <div class="col">
+                        <h4>Issues</h4>
+                        ${generateIssuesTable(issues, planning, sprintNames)}
+                    </div>
                 </div>
             </div>
         `;
+        firstProject = false;
     }
 
     html += `
+                </div>
             </div>
             <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
         </body>
