@@ -281,8 +281,7 @@ const checkSprintCapacity = (sprintName: string, issue: Issue, assignee: string,
 
 // Helper functie om de eerste beschikbare sprint te vinden
 export function findFirstAvailableSprint(issue: JiraIssue, planningResult: PlanningResult, startIndex: number = 0): string {
-    const assignee = getAssigneeName(issue.fields?.assignee);
-    if (!assignee) return '100'; // Fallback sprint als er geen assignee is
+    const assignee = getAssigneeName(issue.fields?.assignee) || 'Unassigned'; // Gebruik 'Unassigned' als er geen assignee is
 
     const issueHours = (issue.fields?.timeestimate || 0) / 3600;
     const sprintNames = [...new Set(planningResult.sprintCapacity.map(cap => cap.sprint))]
@@ -297,33 +296,22 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
         }
     }
 
-    // Haal de due date van het issue op
-    const dueDate = issue.fields?.duedate ? new Date(issue.fields?.duedate) : null;
-    const currentDate = new Date();
-
-    // Als het issue een due date heeft, vind eerst de sprint waar de due date in valt
+    // Bepaal de sprint index voor de due date
+    const dueDate = issue.fields?.duedate ? new Date(issue.fields.duedate) : null;
     let dueDateSprintIndex = -1;
     if (dueDate) {
-        for (let i = 0; i < sprintNames.length; i++) {
-            const sprintName = sprintNames[i];
+        dueDateSprintIndex = sprintNames.findIndex(sprintName => {
             const sprint = planningResult.sprints.find(s => s.sprint === sprintName);
-            if (!sprint?.startDate) continue;
-            
+            if (!sprint?.startDate) return false;
             const sprintStartDate = new Date(sprint.startDate);
             const sprintEndDate = new Date(sprintStartDate);
             sprintEndDate.setDate(sprintStartDate.getDate() + 14); // Sprint duurt 2 weken
-
-            // Als de due date in deze sprint valt, onthoud deze sprint index
-            if (dueDate >= sprintStartDate && dueDate <= sprintEndDate) {
-                dueDateSprintIndex = i;
-                break;
-            }
-        }
+            return dueDate >= sprintStartDate && dueDate <= sprintEndDate;
+        });
     }
 
-    // Vind de sprint van de laatste voorganger
+    // Vind de laatste sprint van de voorgangers
     let lastPredecessorSprintIndex = -1;
-
     for (const predecessorKey of predecessors) {
         const predecessor = planningResult.plannedIssues.find(pi => pi.issue.key === predecessorKey);
         if (predecessor) {
@@ -337,7 +325,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
     // Als het issue een due date heeft die in het verleden ligt,
     // begin dan vanaf de huidige sprint
     let startFromIndex = startIndex;
-    if (dueDate && dueDate < currentDate) {
+    if (dueDate && dueDate < new Date()) {
         const currentSprintIndex = sprintNames.indexOf(planningResult.currentSprint);
         if (currentSprintIndex !== -1) {
             startFromIndex = Math.max(startFromIndex, currentSprintIndex);
@@ -354,10 +342,10 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
     if (highestSprintIndex !== -1) {
         startFromIndex = Math.max(startFromIndex, highestSprintIndex);
     }
-    
-    // Als het issue een due date heeft, zoek eerst in de sprint waar de due date in valt
-    if (dueDateSprintIndex !== -1) {
-        const sprintName = sprintNames[dueDateSprintIndex];
+
+    // Zoek de eerste beschikbare sprint
+    for (let i = startFromIndex; i < sprintNames.length; i++) {
+        const sprintName = sprintNames[i];
         
         // Controleer of er opvolgers zijn die al gepland zijn in deze sprint of eerder
         const successors = getSuccessors(issue);
@@ -366,7 +354,7 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
             const successor = planningResult.plannedIssues.find(pi => pi.issue.key === successorKey);
             if (successor) {
                 const successorSprintIndex = sprintNames.indexOf(successor.sprint);
-                if (successorSprintIndex <= dueDateSprintIndex) {
+                if (successorSprintIndex <= i) {
                     canPlaceInSprint = false;
                     break;
                 }
@@ -401,106 +389,10 @@ export function findFirstAvailableSprint(issue: JiraIssue, planningResult: Plann
                 }
             }
         }
-        
-        // Als er geen capaciteit is in de sprint waar de due date in valt,
-        // of als er opvolgers zijn die al gepland zijn in deze sprint of eerder,
-        // zoek dan in latere sprints
-        for (let i = dueDateSprintIndex + 1; i < sprintNames.length; i++) {
-            const sprintName = sprintNames[i];
-            
-            // Controleer of er opvolgers zijn die al gepland zijn in deze sprint of eerder
-            let canPlaceInSprint = true;
-            for (const successorKey of successors) {
-                const successor = planningResult.plannedIssues.find(pi => pi.issue.key === successorKey);
-                if (successor) {
-                    const successorSprintIndex = sprintNames.indexOf(successor.sprint);
-                    if (successorSprintIndex <= i) {
-                        canPlaceInSprint = false;
-                        break;
-                    }
-                }
-            }
-
-            if (canPlaceInSprint) {
-                if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
-                    const totalCapacity = planningResult.sprintCapacity
-                        .filter(cap => cap.sprint === sprintName)
-                        .reduce((sum, cap) => sum + cap.capacity, 0);
-
-                    const usedHours = Object.values(planningResult.employeeSprintUsedHours)
-                        .reduce((sum, sprintData) => sum + (sprintData[sprintName] || 0), 0);
-
-                    const availableCapacity = totalCapacity - usedHours;
-
-                    if (availableCapacity >= issueHours) {
-                        return sprintName;
-                    }
-                } else {
-                    const totalCapacity = planningResult.sprintCapacity
-                        .filter(cap => cap.sprint === sprintName && cap.employee === assignee)
-                        .reduce((sum, cap) => sum + cap.capacity, 0);
-
-                    const usedHours = planningResult.employeeSprintUsedHours[assignee]?.[sprintName] || 0;
-                    const availableCapacity = totalCapacity - usedHours;
-
-                    if (availableCapacity >= issueHours) {
-                        return sprintName;
-                    }
-                }
-            }
-        }
-    } else {
-        // Als het issue geen due date heeft, zoek vanaf de opgegeven index
-        for (let i = startFromIndex; i < sprintNames.length; i++) {
-            const sprintName = sprintNames[i];
-            
-            // Controleer of er opvolgers zijn die al gepland zijn in deze sprint of eerder
-            const successors = getSuccessors(issue);
-            let canPlaceInSprint = true;
-            for (const successorKey of successors) {
-                const successor = planningResult.plannedIssues.find(pi => pi.issue.key === successorKey);
-                if (successor) {
-                    const successorSprintIndex = sprintNames.indexOf(successor.sprint);
-                    if (successorSprintIndex <= i) {
-                        canPlaceInSprint = false;
-                        break;
-                    }
-                }
-            }
-
-            if (canPlaceInSprint) {
-                if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
-                    const totalCapacity = planningResult.sprintCapacity
-                        .filter(cap => cap.sprint === sprintName)
-                        .reduce((sum, cap) => sum + cap.capacity, 0);
-
-                    const usedHours = Object.values(planningResult.employeeSprintUsedHours)
-                        .reduce((sum, sprintData) => sum + (sprintData[sprintName] || 0), 0);
-
-                    const availableCapacity = totalCapacity - usedHours;
-
-                    if (availableCapacity >= issueHours) {
-                        return sprintName;
-                    }
-                } else {
-                    const totalCapacity = planningResult.sprintCapacity
-                        .filter(cap => cap.sprint === sprintName && cap.employee === assignee)
-                        .reduce((sum, cap) => sum + cap.capacity, 0);
-
-                    const usedHours = planningResult.employeeSprintUsedHours[assignee]?.[sprintName] || 0;
-                    const availableCapacity = totalCapacity - usedHours;
-
-                    if (availableCapacity >= issueHours) {
-                        return sprintName;
-                    }
-                }
-            }
-        }
     }
 
-    // Als we hier komen, betekent dit dat er geen sprint is met voldoende capaciteit
-    // In dit geval moeten we de laatste sprint gebruiken
-    return sprintNames[sprintNames.length - 1];
+    // Als er geen sprint is gevonden met voldoende capaciteit, gebruik sprint 100 als fallback
+    return '100';
 }
 
 // Helper functie om de beschikbare capaciteit te berekenen
@@ -1008,32 +900,70 @@ export async function calculatePlanning(issues: Issue[], projectType: string, go
         const issue = sortedIssues[i];
         const assignee = getAssigneeName(issue.fields?.assignee);
         
-        // Debug logging voor AMP-14721
-        if (issue.key === 'AMP-14721') {
-            logger.info(`\nDebug: Proberen AMP-14721 te plannen`);
-            logger.info(`- Assignee: ${assignee}`);
-            logger.info(`- Voorgangers: ${getPredecessors(issue).join(', ')}`);
-            logger.info(`- Opvolgers: ${getSuccessors(issue).join(', ')}`);
-            logger.info(`- Uren: ${(issue.fields?.timeestimate || 0) / 3600}`);
+        // Controleer eerst of alle voorgangers zijn gepland
+        const predecessors = getPredecessors(issue);
+        const allPredecessorsPlanned = predecessors.every(predecessorKey => 
+            result.plannedIssues.some(pi => pi.issue.key === predecessorKey)
+        );
+
+        // Als er voorgangers zijn die niet gepland zijn, probeer eerst de voorgangers te plannen
+        if (predecessors.length > 0 && !allPredecessorsPlanned) {
+            logger.info(`\nIssue ${issue.key} heeft ongeplande voorgangers, probeer deze eerst te plannen`);
+            
+            // Vind alle ongeplande voorgangers
+            const unplannedPredecessors = predecessors.filter(predecessorKey => 
+                !result.plannedIssues.some(pi => pi.issue.key === predecessorKey)
+            );
+            
+            // Probeer de voorgangers te plannen
+            for (const predecessorKey of unplannedPredecessors) {
+                const predecessor = issues.find(i => i.key === predecessorKey);
+                if (predecessor) {
+                    const predecessorAssignee = getAssigneeName(predecessor.fields?.assignee);
+                    const predecessorSprint = findFirstAvailableSprint(predecessor, result, 0);
+                    const planned = planIssue(predecessor, predecessorSprint, predecessorAssignee);
+                    
+                    if (!planned) {
+                        logger.info(`\nKon voorganger ${predecessorKey} niet plannen, sla issue ${issue.key} over`);
+                        continue;
+                    }
+                }
+            }
+            
+            // Controleer opnieuw of alle voorgangers nu gepland zijn
+            const allPredecessorsNowPlanned = predecessors.every(predecessorKey => 
+                result.plannedIssues.some(pi => pi.issue.key === predecessorKey)
+            );
+            
+            if (!allPredecessorsNowPlanned) {
+                logger.info(`\nNiet alle voorgangers van ${issue.key} konden worden gepland, sla issue over`);
+                continue;
+            }
         }
         
         // Vind de eerste beschikbare sprint
         const sprintName = findFirstAvailableSprint(issue, result, 0);
         
-        // Debug logging voor AMP-14721
-        if (issue.key === 'AMP-14721') {
-            logger.info(`- Gevonden sprint: ${sprintName}`);
-            logger.info(`- Beschikbare capaciteit in sprint ${sprintName}: ${getAvailableCapacity(sprintName, assignee, result)}`);
-        }
-        
         // Plan het issue
         const planned = planIssue(issue, sprintName, assignee);
         
-        // Debug logging voor AMP-14721
-        if (issue.key === 'AMP-14721') {
-            logger.info(`- Gepland: ${planned}`);
-            if (!planned) {
-                logger.info(`- Reden: Geen voldoende capaciteit in sprint ${sprintName}`);
+        // Als het issue niet kon worden gepland, sla alle opvolgers over
+        if (!planned) {
+            logger.info(`\nIssue ${issue.key} kon niet worden gepland, opvolgers worden overgeslagen`);
+            
+            // Vind alle opvolgers in de keten
+            const allSuccessors = getAllSuccessorsInChain(issue, issues);
+            logger.info(`- Aantal opvolgers in keten: ${allSuccessors.size}`);
+            
+            // Verwijder alle opvolgers uit de te plannen issues
+            const successorIndices = Array.from(allSuccessors).map(successorKey => 
+                sortedIssues.findIndex(issue => issue.key === successorKey)
+            ).filter(index => index !== -1);
+            
+            // Verwijder de opvolgers in omgekeerde volgorde om indexen correct te houden
+            for (const index of successorIndices.sort((a, b) => b - a)) {
+                const removedIssue = sortedIssues.splice(index, 1)[0];
+                logger.info(`- Opvolger ${removedIssue.key} verwijderd uit planning`);
             }
         }
     }
