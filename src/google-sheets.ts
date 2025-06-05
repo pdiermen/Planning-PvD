@@ -321,30 +321,35 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                         const sprintStartDate = projectConfig.sprintStartDate;
                         const sprintDuration = 14; // 2 weken per sprint
                         
-                        // Bereken de start- en einddatum van deze sprint
+                        // Bereken de start- en einddatum van sprint 1
                         const sprintStart = new Date(sprintStartDate);
-                        sprintStart.setDate(sprintStartDate.getDate() + ((sprintNumber - 1) * sprintDuration));
-                        
                         const sprintEnd = new Date(sprintStart);
                         sprintEnd.setDate(sprintStart.getDate() + sprintDuration - 1);
-                        
-                        // Controleer of dit de huidige sprint is
-                        if (currentDate >= sprintStart && currentDate <= sprintEnd) {
+
+                        // Voor sprint 1: bereken capaciteit op basis van resterende werkdagen
+                        if (sprintNumber === 1) {
                             // Bereken het aantal resterende werkdagen (inclusief vandaag)
                             const remainingWorkDays = getWorkDaysBetween(currentDate, sprintEnd);
                             const totalWorkDaysInSprint = 10; // 2 weken = 10 werkdagen
                             const capacityFactor = remainingWorkDays / totalWorkDaysInSprint;
                             
-                            capacity = effectiveHours * 2 * capacityFactor;
+                            // Pas de capaciteit aan op basis van de resterende werkdagen
+                            const originalCapacity = effectiveHours * 2;
+                            capacity = Math.round(originalCapacity * capacityFactor);
                             availableCapacity = capacity;
                             
-                            logger.info(`Aangepaste capaciteit voor sprint ${sprintNumber} (${project}):`);
+                            logger.info(`Aangepaste capaciteit voor sprint 1 (${project}):`);
                             logger.info(`- Sprint startdatum: ${sprintStart.toISOString()}`);
                             logger.info(`- Sprint einddatum: ${sprintEnd.toISOString()}`);
                             logger.info(`- Huidige datum: ${currentDate.toISOString()}`);
                             logger.info(`- Resterende werkdagen: ${remainingWorkDays}`);
                             logger.info(`- Capaciteitsfactor: ${capacityFactor}`);
+                            logger.info(`- Originele capaciteit: ${originalCapacity}`);
                             logger.info(`- Aangepaste capaciteit: ${capacity}`);
+                        } else {
+                            // Voor alle andere sprints: gebruik volledige capaciteit
+                            capacity = effectiveHours * 2;
+                            availableCapacity = capacity;
                         }
 
                         sprintCapacities.push({
@@ -379,12 +384,16 @@ function getWorkDaysBetween(startDate: Date, endDate: Date): number {
     let workDays = 0;
     const currentDate = new Date(startDate);
     
-    while (currentDate <= endDate) {
+    // Tel de huidige datum altijd mee als werkdag
+    workDays++;
+    
+    // Tel de resterende dagen
+    while (currentDate < endDate) {
+        currentDate.setDate(currentDate.getDate() + 1);
         const dayOfWeek = currentDate.getDay();
         if (dayOfWeek !== 0 && dayOfWeek !== 6) { // 0 = zondag, 6 = zaterdag
             workDays++;
         }
-        currentDate.setDate(currentDate.getDate() + 1);
     }
     
     return workDays;
