@@ -332,21 +332,16 @@ app.get('/', async (req, res) => {
 
         // Haal project configuraties op
         const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
+        logger.info(`Aantal project configuraties gevonden: ${projectConfigs.length}`);
+        logger.info('Gevonden project configuraties:');
+        projectConfigs.forEach(config => {
+            logger.info(`- Project: ${config.project}, Sprint startdatum: ${config.sprintStartDate}`);
+        });
         
         // Haal employee data op
-        let employeeSheetsData;
+        let employeeSheetsData: (string | null)[][] | null = null;
         try {
             employeeSheetsData = await getGoogleSheetsData('Employees!A1:H');
-            if (employeeSheetsData) {
-                const headerRow = employeeSheetsData[0];
-                const nameIndex = headerRow.findIndex(header => header?.toLowerCase() === 'naam');
-                const effectiveHoursIndex = headerRow.findIndex(header => header?.toLowerCase() === 'effectieve uren');
-                const projectIndex = headerRow.findIndex(header => header?.toLowerCase() === 'project');
-
-                if (nameIndex === -1 || effectiveHoursIndex === -1 || projectIndex === -1) {
-                    throw new Error('Verplichte kolommen niet gevonden in Employees sheet');
-                }
-            }
         } catch (error) {
             console.error('Error bij ophalen van employee data:', error);
             throw error;
@@ -378,7 +373,7 @@ app.get('/', async (req, res) => {
         const projectPlanning = new Map<string, PlanningResult>();
         for (const config of projectConfigs) {
             const issues = projectIssues.get(config.project) || [];
-            const planning = await calculatePlanning(issues, config.project, employeeSheetsData || []);
+            const planning = await calculatePlanning(config, issues, employeeSheetsData || []);
             projectPlanning.set(config.project, planning);
         }
 
@@ -1724,6 +1719,7 @@ app.get('/planning', async (req, res) => {
             return res.status(400).send('Project type is verplicht');
         }
 
+        // Haal project configuraties op uit Google Sheet
         const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
         const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
         const projectConfig = projectConfigs.find(config => config.project === projectType);
@@ -1740,50 +1736,23 @@ app.get('/planning', async (req, res) => {
             throw error;
         }
 
-        const issues = await getIssues(projectConfig.jqlFilter);
-        const planning = await calculatePlanning(issues, projectType, googleSheetsData);
+        // Haal issues op voor het project
+        const issues = await getIssuesForProject(projectConfig);
+        
+        // Bereken de planning
+        const planning = await calculatePlanning(projectConfig, issues, googleSheetsData);
+        
+        // Haal sprint namen op
         const sprintNames = await getSprintNamesFromSheet(googleSheetsData);
 
-        let html = `
-            <!DOCTYPE html>
-            <html lang="nl">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Planning Overzicht - ${projectType}</title>
-                <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-                <style>
-                    ${styles}
-                    .table { font-size: 0.9rem; }
-                    .table th { background-color: #f8f9fa; }
-                    .table-success { background-color: #d4edda !important; }
-                    .table-warning { background-color: #fff3cd !important; }
-                    .table-danger { background-color: #f8d7da !important; }
-                    .btn-group { margin-bottom: 20px; }
-                    .navbar { margin-bottom: 20px; }
-                </style>
-            </head>
-            <body>
-                <nav class="navbar">
-                    <a href="/" class="navbar-brand">Planning Dashboard</a>
-                    <ul class="navbar-nav">
-                        <li class="nav-item">
-                            <a href="/" class="nav-link active">Projecten</a>
-                        </li>
-                    </ul>
-                </nav>
-                <div class="container-fluid">
-                    ${generateSprintHoursTable(planning, sprintNames)}
-                </div>
-                <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-            </body>
-            </html>
-        `;
-
-        res.send(html);
+        // Stuur de response
+        res.json({
+            planning,
+            sprintNames: Object.fromEntries(sprintNames)
+        });
     } catch (error) {
-        console.error('Error in /planning route:', error);
-        res.status(500).send('Er is een fout opgetreden bij het ophalen van de planning');
+        console.error('Error bij ophalen van planning:', error);
+        res.status(500).send('Error bij ophalen van planning');
     }
 });
 
@@ -1969,7 +1938,7 @@ async function getProjectConfigs() {
     try {
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: process.env.GOOGLE_SHEET_ID,
-            range: 'Projects!A1:E'
+            range: 'Projects!A1:F'
         });
 
         const rows = response.data.values;
@@ -1983,13 +1952,22 @@ async function getProjectConfigs() {
         console.log('Headers gevonden:', headers);
 
         // Converteer de data naar project configuraties
-        return dataRows.map(row => ({
-            project: row[0],
-            codes: row[1],
-            jqlFilter: row[2],
-            worklog: row[3],
-            worklogJql: row[4]
-        }));
+        return dataRows.map(row => {
+            let sprintStartDate = null;
+            if (row[5]) {
+                const [year, month, day] = row[5].split('-').map(Number);
+                sprintStartDate = new Date(Date.UTC(year, month - 1, day));
+            }
+            
+            return {
+                project: row[0],
+                codes: row[1] ? row[1].split(',').map((code: string) => code.trim()) : [],
+                jqlFilter: row[2] || '',
+                worklogName: row[3] || '',
+                worklogJql: row[4] || '',
+                sprintStartDate
+            };
+        });
     } catch (error) {
         console.error('Fout bij ophalen project configuraties:', error);
         throw error;
@@ -2006,20 +1984,20 @@ app.get('/api/planning', async (req, res) => {
         const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
         console.log(`Aantal project configuraties gevonden: ${projectConfigs.length}`);
 
+        // Haal employee data op uit Google Sheets
+        const employeeSheetsData = await getGoogleSheetsData('Employees!A1:H');
+
         // Verwerk elk project
         const planningResults = [];
         for (const config of projectConfigs) {
             console.log(`\nVerwerken van project: ${config.project}`);
             
             // Haal issues op voor dit project
-            const issues = await getIssues(config.jqlFilter);
+            const issues = await getIssuesForProject(config);
             console.log(`Aantal issues gevonden voor ${config.project}: ${issues.length}`);
 
-            // Bepaal project type op basis van projectnaam en projectcodes
-            const projectType = config.project;
-
             // Bereken planning voor dit project
-            const planningResult = await calculatePlanning(issues, projectType, null);
+            const planningResult = await calculatePlanning(config, issues, employeeSheetsData || []);
             planningResults.push({
                 project: config.project,
                 planning: planningResult

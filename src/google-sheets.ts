@@ -270,7 +270,36 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
         logger.info(`- Project: ${config.project}, Sprint startdatum: ${config.sprintStartDate?.toISOString() || 'geen'}`);
     });
 
-    // Verwerk de data rijen
+    // Bereken eerst de totale sprint capaciteit per sprint
+    const totalSprintCapacities: { [sprint: string]: number } = {};
+    const usedSprintCapacities: { [sprint: string]: number } = {};
+    
+    // Verwerk de data rijen voor totale sprint capaciteit
+    for (let i = 1; i < googleSheetsData.length; i++) {
+        const row = googleSheetsData[i];
+        if (!row || !Array.isArray(row)) continue;
+
+        const employeeName = row[nameIndex];
+        const effectiveHoursStr = row[effectiveHoursIndex];
+        let effectiveHours = parseFloat(effectiveHoursStr?.toString() || '0');
+
+        // Zet effectieve uren op 0 voor Peter van Diermen en Unassigned
+        if (employeeName === 'Peter van Diermen' || employeeName === 'Unassigned') {
+            effectiveHours = 0;
+        }
+
+        // Genereer capaciteiten voor 100 sprints
+        for (let sprintNumber = 1; sprintNumber <= 100; sprintNumber++) {
+            const sprintKey = sprintNumber.toString();
+            if (!totalSprintCapacities[sprintKey]) {
+                totalSprintCapacities[sprintKey] = 0;
+                usedSprintCapacities[sprintKey] = 0;
+            }
+            totalSprintCapacities[sprintKey] += effectiveHours * 2; // Standaard 2 weken per sprint
+        }
+    }
+
+    // Verwerk de data rijen voor individuele capaciteiten
     for (let i = 1; i < googleSheetsData.length; i++) {
         const row = googleSheetsData[i];
         if (!row || !Array.isArray(row)) continue;
@@ -279,99 +308,77 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
         const effectiveHoursStr = row[effectiveHoursIndex];
         const projectsStr = row[projectIndex];
 
+        // Log de ruwe waarden voor debugging
+        logger.info(`Medewerker ${employeeName}:`);
+        logger.info(`- Effectieve uren (ruw): ${effectiveHoursStr}`);
+        logger.info(`- Projecten: ${projectsStr}`);
 
         // Controleer of we geldige data hebben
-        if (!employeeName || !effectiveHoursStr) {
+        if (!employeeName) {
             logger.warn(`Ongeldige data voor medewerker: ${employeeName || 'onbekend'}`);
             continue;
         }
 
-        const effectiveHours = parseFloat(effectiveHoursStr.toString());
-        
-        // Debug logging voor geparsede waarden
-        logger.info(`Geparsede waarden:`);
-        logger.info(`- Effectieve uren: ${effectiveHours}`);
-        
-        if (isNaN(effectiveHours)) {
-            logger.warn(`Ongeldige numerieke waarden voor medewerker ${employeeName}`);
-            continue;
-        }
-
+        let effectiveHours = parseFloat(effectiveHoursStr?.toString() || '0');
         const projects = projectsStr ? projectsStr.toString().split(',').map(p => p.trim()) : [];
 
-        // Genereer capaciteiten voor 100 sprints om er zeker van te zijn dat er genoeg sprints zijn
+        // Zet effectieve uren op 0 voor Peter van Diermen en Unassigned
+        if (employeeName === 'Peter van Diermen' || employeeName === 'Unassigned') {
+            effectiveHours = 0;
+        }
+
+        // Genereer capaciteiten voor 100 sprints
         for (let sprintNumber = 1; sprintNumber <= 100; sprintNumber++) {
-            if (projects.length === 0 || projects[0] === '') {
-                sprintCapacities.push({
-                    employee: employeeName,
-                    sprint: sprintNumber.toString(),
-                    capacity: effectiveHours * 2, // 2 weken per sprint
-                    project: '',
-                    availableCapacity: effectiveHours * 2, // Standaard gelijk aan de volledige capaciteit
-                    startDate: undefined
-                });
-            } else {
-                projects.forEach(project => {
-                    // Zoek de project configuratie voor dit project
-                    const projectConfig = projectConfigs.find(c => c.project === project);
-                    let capacity = effectiveHours * 2; // Standaard 2 weken per sprint
-                    let availableCapacity = capacity;
+            const sprintKey = sprintNumber.toString();
+            let capacity = effectiveHours * 2; // Standaard 2 weken per sprint
+            let availableCapacity = capacity;
+            let startDate: string | undefined;
 
-                    if (projectConfig?.sprintStartDate) {
-                        const sprintStartDate = projectConfig.sprintStartDate;
-                        const sprintDuration = 14; // 2 weken per sprint
+            // Als er projecten zijn, gebruik de eerste project configuratie voor de startdatum
+            if (projects.length > 0 && projects[0] !== '') {
+                const projectConfig = projectConfigs.find(c => c.project === projects[0]);
+                if (projectConfig?.sprintStartDate) {
+                    const sprintStartDate = projectConfig.sprintStartDate;
+                    const sprintDuration = 14; // 2 weken per sprint
+                    
+                    // Bereken de start- en einddatum van sprint 1
+                    const sprintStart = new Date(sprintStartDate);
+                    const sprintEnd = new Date(sprintStart);
+                    sprintEnd.setDate(sprintStart.getDate() + sprintDuration - 1);
+
+                    // Voor sprint 1: bereken capaciteit op basis van resterende werkdagen
+                    if (sprintNumber === 1) {
+                        // Bereken het aantal resterende werkdagen (inclusief vandaag)
+                        const remainingWorkDays = getWorkDaysBetween(currentDate, sprintEnd);
+                        const totalWorkDaysInSprint = 10; // 2 weken = 10 werkdagen
+                        const capacityFactor = remainingWorkDays / totalWorkDaysInSprint;
                         
-                        // Bereken de start- en einddatum van sprint 1
-                        const sprintStart = new Date(sprintStartDate);
-                        const sprintEnd = new Date(sprintStart);
-                        sprintEnd.setDate(sprintStart.getDate() + sprintDuration - 1);
-
-                        // Voor sprint 1: bereken capaciteit op basis van resterende werkdagen
-                        if (sprintNumber === 1) {
-                            // Bereken het aantal resterende werkdagen (inclusief vandaag)
-                            const remainingWorkDays = getWorkDaysBetween(currentDate, sprintEnd);
-                            const totalWorkDaysInSprint = 10; // 2 weken = 10 werkdagen
-                            const capacityFactor = remainingWorkDays / totalWorkDaysInSprint;
-                            
-                            // Pas de capaciteit aan op basis van de resterende werkdagen
-                            const originalCapacity = effectiveHours * 2;
-                            capacity = Math.round(originalCapacity * capacityFactor);
-                            availableCapacity = capacity;
-                            
-                            logger.info(`Aangepaste capaciteit voor sprint 1 (${project}):`);
-                            logger.info(`- Sprint startdatum: ${sprintStart.toISOString()}`);
-                            logger.info(`- Sprint einddatum: ${sprintEnd.toISOString()}`);
-                            logger.info(`- Huidige datum: ${currentDate.toISOString()}`);
-                            logger.info(`- Resterende werkdagen: ${remainingWorkDays}`);
-                            logger.info(`- Capaciteitsfactor: ${capacityFactor}`);
-                            logger.info(`- Originele capaciteit: ${originalCapacity}`);
-                            logger.info(`- Aangepaste capaciteit: ${capacity}`);
-                        } else {
-                            // Voor alle andere sprints: gebruik volledige capaciteit
-                            capacity = effectiveHours * 2;
-                            availableCapacity = capacity;
-                        }
-
-                        sprintCapacities.push({
-                            employee: employeeName,
-                            sprint: sprintNumber.toString(),
-                            capacity: capacity,
-                            project: project,
-                            availableCapacity: availableCapacity,
-                            startDate: sprintStart.toISOString()
-                        });
-                    } else {
-                        sprintCapacities.push({
-                            employee: employeeName,
-                            sprint: sprintNumber.toString(),
-                            capacity: capacity,
-                            project: project,
-                            availableCapacity: availableCapacity,
-                            startDate: undefined
-                        });
+                        // Pas de capaciteit aan op basis van de resterende werkdagen
+                        const originalCapacity = effectiveHours * 2;
+                        capacity = Math.round(originalCapacity * capacityFactor);
+                        availableCapacity = capacity;
                     }
-                });
+
+                    startDate = sprintStart.toISOString();
+                }
             }
+
+            // Voor Peter van Diermen en Unassigned: gebruik de resterende sprint capaciteit
+            if (employeeName === 'Peter van Diermen' || employeeName === 'Unassigned') {
+                capacity = totalSprintCapacities[sprintKey];
+                availableCapacity = totalSprintCapacities[sprintKey] - usedSprintCapacities[sprintKey];
+                usedSprintCapacities[sprintKey] += capacity; // Update de gebruikte capaciteit
+            }
+
+            // Voeg één capaciteit toe per medewerker per sprint
+            sprintCapacities.push({
+                employee: employeeName,
+                sprint: sprintKey,
+                capacity: capacity,
+                project: projects[0] || '', // Gebruik het eerste project als hoofdproject
+                availableCapacity: availableCapacity,
+                startDate: startDate
+            });
         }
     }
 
@@ -462,62 +469,29 @@ export async function writePlanningAndIssuesToSheet(projectName: string, plannin
             }
         });
 
-        // Sorteer de sprints numeriek
-        const sortedSprints = Array.from(sprintCapacities.keys()).sort((a, b) => Number(a) - Number(b));
-
-        // Voeg planning data toe per sprint
-        sortedSprints.forEach(sprint => {
-            const capacities = sprintCapacities.get(sprint) || [];
-            let sprintTotalCapacity = 0;
-            let sprintTotalUsed = 0;
-            let sprintTotalAvailable = 0;
-
+        // Voeg de planning data toe
+        for (const [sprint, capacities] of sprintCapacities) {
             capacities.forEach(capacity => {
-                const usedHours = planning.employeeSprintUsedHours[capacity.employee]?.[capacity.sprint] || 0;
-                const available = capacity.capacity - usedHours;
+                // Zet effectieve uren op 0 voor Peter van Diermen en Unassigned
+                let effectiveHours = capacity.capacity;
+                let usedHours = capacity.capacity - capacity.availableCapacity;
+                let availableHours = capacity.availableCapacity;
+
+                if (capacity.employee === 'Peter van Diermen' || capacity.employee === 'Unassigned') {
+                    effectiveHours = 0;
+                    usedHours = 0;
+                    availableHours = 0;
+                }
+
                 planningData.push([
-                    capacity.sprint,
+                    sprint,
                     capacity.employee,
-                    capacity.capacity.toFixed(1).replace('.', ','),
-                    usedHours.toFixed(1).replace('.', ','),
-                    available.toFixed(1).replace('.', ',')
+                    effectiveHours.toString(),
+                    usedHours.toString(),
+                    availableHours.toString()
                 ]);
-
-                sprintTotalCapacity += capacity.capacity;
-                sprintTotalUsed += usedHours;
-                sprintTotalAvailable += available;
             });
-
-            // Voeg totaalregel toe voor deze sprint
-            planningData.push([
-                sprint,
-                'TOTAAL',
-                sprintTotalCapacity.toFixed(1).replace('.', ','),
-                sprintTotalUsed.toFixed(1).replace('.', ','),
-                sprintTotalAvailable.toFixed(1).replace('.', ',')
-            ]);
-
-            // Voeg een lege rij toe tussen sprints voor betere leesbaarheid
-            planningData.push([]);
-        });
-
-        // Bereid de issues data voor
-        const issuesData = [
-            ['Issues Overzicht'],
-            ['Key', 'Samenvatting', 'Status', 'Sprint', 'Toegewezen aan', 'Uren']
-        ];
-
-        issues.forEach(issue => {
-            const plannedIssue = planning.plannedIssues.find(pi => pi.issue.key === issue.key);
-            issuesData.push([
-                issue.key,
-                issue.fields?.summary || '',
-                issue.fields?.status?.name || '',
-                plannedIssue?.sprint || 'Niet gepland',
-                getAssigneeName(issue.fields?.assignee),
-                ((issue.fields?.timeestimate || 0) / 3600).toFixed(1).replace('.', ',')
-            ]);
-        });
+        }
 
         // Schrijf de planning data naar de sheet
         await sheets.spreadsheets.values.update({
@@ -532,6 +506,25 @@ export async function writePlanningAndIssuesToSheet(projectName: string, plannin
         // Wacht 1 seconde om quota te respecteren
         await new Promise(resolve => setTimeout(resolve, 1000));
 
+        // Bereid de issues data voor
+        const issuesData = [
+            ['Issues Overzicht'],
+            ['Issue', 'Titel', 'Sprint', 'Medewerker', 'Geschatte uren', 'Status']
+        ];
+
+        // Voeg de issues data toe
+        issues.forEach(issue => {
+            const plannedIssue = planning.plannedIssues.find(pi => pi.issue.key === issue.key);
+            issuesData.push([
+                issue.key,
+                issue.fields?.summary || '',
+                plannedIssue?.sprint || '',
+                issue.fields?.assignee?.displayName || 'Unassigned',
+                issue.fields?.timeoriginalestimate ? (issue.fields.timeoriginalestimate / 3600).toString() : '0',
+                issue.fields?.status?.name || ''
+            ]);
+        });
+
         // Schrijf de issues data naar de sheet
         await sheets.spreadsheets.values.update({
             spreadsheetId,
@@ -542,9 +535,8 @@ export async function writePlanningAndIssuesToSheet(projectName: string, plannin
             }
         });
 
-        logger.info(`Planning en issues voor project ${projectName} succesvol geschreven naar Google Sheet`);
     } catch (error) {
-        logger.error(`Error bij schrijven van planning en issues voor project ${projectName} naar Google Sheet: ${error}`);
+        logger.error(`Fout bij schrijven naar Google Sheets: ${error}`);
         throw error;
     }
 }

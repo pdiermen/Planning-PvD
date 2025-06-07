@@ -51,10 +51,12 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
                     employeeData[capacity.employee] = {};
                 }
                 if (!employeeData[capacity.employee][capacity.sprint]) {
+                    // Zet effectieve uren op 0 voor Peter van Diermen en Unassigned
+                    const available = (capacity.employee === 'Peter van Diermen' || capacity.employee === 'Unassigned') ? 0 : capacity.capacity;
                     employeeData[capacity.employee][capacity.sprint] = {
-                        available: capacity.capacity,
+                        available: available,
                         planned: 0,
-                        remaining: capacity.capacity
+                        remaining: available
                     };
                 }
             }
@@ -107,9 +109,12 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
                     getAssigneeName(pi.issue.fields?.assignee) === employee
                 );
                 
-                sprintTotalAvailable += data.available;
-                sprintTotalPlanned += data.planned;
-                sprintTotalRemaining += data.remaining;
+                // Update totalen alleen als het geen Peter van Diermen of Unassigned is
+                if (employee !== 'Peter van Diermen' && employee !== 'Unassigned') {
+                    sprintTotalAvailable += data.available;
+                    sprintTotalPlanned += data.planned;
+                    sprintTotalRemaining += data.remaining;
+                }
                 sprintTotalIssues += plannedIssues.length;
 
                 // Format de geplande issues met rode tekst voor issues die te laat zijn ingepland
