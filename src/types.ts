@@ -176,6 +176,12 @@ export interface SprintCapacity {
     startDate?: string;
 }
 
+export interface SprintDates {
+    sprint: string;
+    startDate: string;
+    endDate: string;
+}
+
 export interface PlanningResult {
     sprintHours: Record<string, Record<string, number>>;
     plannedIssues: PlannedIssue[];
