@@ -2,7 +2,7 @@ import type { Issue, PlanningResult, PlannedIssue, IssueLink, EfficiencyData, Pr
 import { getSprintCapacityFromSheet } from '../google-sheets.js';
 import logger from '../logger.js';
 import { getSuccessors, getPredecessors } from '../utils/jira-helpers.js';
-import { getAssigneeName } from '../utils/shared-functions.js';
+import { getAssigneeName } from '../utils/assignee.js';
 import { getProjectConfigsFromSheet } from '../google-sheets.js';
 import { calculateCurrentSprint } from '../utils/date-utils.js';
 
@@ -966,17 +966,8 @@ export async function calculatePlanning(
     for (const issue of sortedIssues) {
         const sprint = findFirstAvailableSprint(issue, planningResult);
         if (sprint) {
-            const assignee = getAssigneeName(issue);
+            const assignee = getAssigneeName(issue.fields?.assignee);
             const hours = issue.fields?.timeestimate ? issue.fields.timeestimate / 3600 : 0;
-
-            // Voeg toe aan planning
-            if (!planningResult.sprintHours[sprint]) {
-                planningResult.sprintHours[sprint] = {};
-            }
-            if (!planningResult.sprintHours[sprint][assignee]) {
-                planningResult.sprintHours[sprint][assignee] = 0;
-            }
-            planningResult.sprintHours[sprint][assignee] += hours;
 
             // Voeg toe aan plannedIssues
             planningResult.plannedIssues.push({
@@ -996,14 +987,23 @@ export async function calculatePlanning(
             }
             planningResult.sprintAssignments[sprint][assignee].push(issue);
 
-            // Update employeeSprintUsedHours
+            // Update sprintHours
+            if (!planningResult.sprintHours[sprint]) {
+                planningResult.sprintHours[sprint] = {};
+            }
+            if (!planningResult.sprintHours[sprint][assignee]) {
+                planningResult.sprintHours[sprint][assignee] = 0;
+            }
+            planningResult.sprintHours[sprint][assignee] += hours;
+
+            // Update employeeSprintUsedHours (voor backward compatibility)
             if (!planningResult.employeeSprintUsedHours[assignee]) {
                 planningResult.employeeSprintUsedHours[assignee] = {};
             }
             if (!planningResult.employeeSprintUsedHours[assignee][sprint]) {
                 planningResult.employeeSprintUsedHours[assignee][sprint] = 0;
             }
-            planningResult.employeeSprintUsedHours[assignee][sprint] += hours;
+            planningResult.employeeSprintUsedHours[assignee][sprint] = planningResult.sprintHours[sprint][assignee];
 
             logger.info(`Issue ${issue.key} gepland in sprint ${sprint} voor ${assignee} (${hours} uur)`);
         } else {

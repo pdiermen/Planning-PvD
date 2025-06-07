@@ -12,6 +12,13 @@ const logger = winston.createLogger({
                 winston.format.colorize(),
                 winston.format.simple()
             )
+        }),
+        new winston.transports.File({ 
+            filename: 'planning.log',
+            format: winston.format.combine(
+                winston.format.timestamp(),
+                winston.format.simple()
+            )
         })
     ]
 });

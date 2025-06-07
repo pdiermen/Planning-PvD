@@ -1,10 +1,6 @@
 import type { Issue, PlanningResult, EfficiencyData, WorkLog, SprintCapacity } from '../types.js';
-
-function getAssigneeName(assignee: any): string {
-    if (!assignee) return 'Unassigned';
-    if (typeof assignee === 'string') return assignee;
-    return assignee.displayName || 'Unassigned';
-}
+import logger from '../logger.js';
+import { getAssigneeName } from './assignee.js';
 
 export function generateEfficiencyTable(efficiencyData: EfficiencyData[]): string {
     let html = '<table class="table table-striped">';
@@ -25,9 +21,26 @@ export function generateEfficiencyTable(efficiencyData: EfficiencyData[]): strin
 }
 
 export function generateSprintHoursTable(planning: PlanningResult, sprintNames: Map<string, string>): string {
+    logger.info('generateSprintHoursTable wordt aangeroepen');
+    
     if (!planning.sprintHours) {
+        logger.info('Geen sprint uren beschikbaar');
         return '<p>Geen sprint uren beschikbaar</p>';
     }
+
+    // Log alle unieke assignees in plannedIssues
+    const uniqueAssignees = [...new Set(planning.plannedIssues.map(pi => pi.assignee))];
+    logger.info(`Unieke assignees in plannedIssues: ${JSON.stringify(uniqueAssignees)}`);
+
+    logger.info(`Planning data: ${JSON.stringify({
+        sprintHours: planning.sprintHours,
+        plannedIssues: planning.plannedIssues.map(pi => ({
+            key: pi.issue.key,
+            sprint: pi.sprint,
+            assignee: pi.assignee,
+            hours: pi.hours
+        }))
+    })}`);
 
     // Filter sprints waar issues in zijn gepland
     const availableSprintNames = Object.keys(planning.sprintHours)
@@ -39,6 +52,8 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
             return hasPlannedIssues && plannedIssuesInSprint.length > 0;
         })
         .sort((a, b) => parseInt(a) - parseInt(b));
+
+    logger.info(`Beschikbare sprints: ${JSON.stringify(availableSprintNames)}`);
 
     const employeeData: { [key: string]: { [key: string]: { available: number; planned: number; remaining: number } } } = {};
 
@@ -63,26 +78,31 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
         }
     }
 
-    // Verwerk gebruikte uren alleen voor actieve medewerkers
-    if (planning.employeeSprintUsedHours) {
-        for (const [employee, sprintData] of Object.entries(planning.employeeSprintUsedHours)) {
-            // Alleen uren van actieve medewerkers tonen
-            if (employeeData[employee]) {
-                for (const [sprint, hours] of Object.entries(sprintData)) {
-                    if (!employeeData[employee][sprint]) {
-                        employeeData[employee][sprint] = {
-                            available: 0,
-                            planned: hours,
-                            remaining: -hours
-                        };
-                    } else {
-                        employeeData[employee][sprint].planned = hours;
-                        employeeData[employee][sprint].remaining = employeeData[employee][sprint].available - hours;
-                    }
-                }
-            }
+    logger.info(`Employee data na capaciteit: ${JSON.stringify(employeeData, null, 2)}`);
+
+    // Initialiseer employeeData voor alle medewerkers die issues hebben
+    for (const plannedIssue of planning.plannedIssues) {
+        const { assignee } = plannedIssue;
+        if (!employeeData[assignee]) {
+            employeeData[assignee] = {};
         }
     }
+
+    // Bereken geplande uren per sprint en medewerker
+    for (const plannedIssue of planning.plannedIssues) {
+        const { sprint, assignee, hours } = plannedIssue;
+        if (!employeeData[assignee][sprint]) {
+            employeeData[assignee][sprint] = {
+                available: 0,
+                planned: 0,
+                remaining: 0
+            };
+        }
+        employeeData[assignee][sprint].planned += hours;
+        employeeData[assignee][sprint].remaining = employeeData[assignee][sprint].available - employeeData[assignee][sprint].planned;
+    }
+
+    logger.info(`Employee data na berekening geplande uren: ${JSON.stringify(employeeData, null, 2)}`);
 
     let html = '<table class="table table-striped table-bordered" style="width: 100%;">';
     html += '<thead><tr class="table-dark text-dark">';
