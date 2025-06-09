@@ -29,6 +29,12 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
         if (processedIssues.has(issue.issue.key)) return;
         processedIssues.add(issue.issue.key);
 
+        // Controleer of het issue al in de juiste sprint staat
+        if (issue.sprint === newSprint) {
+            logger.info(`Issue ${issue.issue.key} staat al in sprint ${newSprint}, overslaan...`);
+            return;
+        }
+
         // Verplaats het issue
         const oldSprint = issue.sprint;
         issue.sprint = newSprint;
@@ -75,7 +81,10 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
         if (!planning.sprintAssignments[newSprint][issue.assignee]) {
             planning.sprintAssignments[newSprint][issue.assignee] = [];
         }
-        planning.sprintAssignments[newSprint][issue.assignee].push(issue.issue);
+        // Controleer of het issue al in de nieuwe sprint staat
+        if (!planning.sprintAssignments[newSprint][issue.assignee].some(i => i.key === issue.issue.key)) {
+            planning.sprintAssignments[newSprint][issue.assignee].push(issue.issue);
+        }
 
         // Verplaats voorgangers naar een eerdere sprint
         const predecessors = getPredecessors(issue.issue);
@@ -108,6 +117,11 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
         }
     };
 
+    // Bepaal de huidige sprint
+    const currentDate = new Date();
+    const currentSprintIndex = findSprintIndexForDate(currentDate, planning.sprintCapacity);
+    const currentSprintName = currentSprintIndex !== -1 ? planning.sprintCapacity[currentSprintIndex].sprint : null;
+
     // Valideer alle issues
     for (const plannedIssue of planning.plannedIssues) {
         const issue = plannedIssue.issue;
@@ -122,8 +136,14 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
                 const sprintEndDate = new Date(sprintStartDate);
                 sprintEndDate.setDate(sprintStartDate.getDate() + 14); // Sprint duurt 2 weken
 
+                // Bepaal de huidige sprint
+                const currentDate = new Date();
+                const currentSprintIndex = findSprintIndexForDate(currentDate, planning.sprintCapacity);
+                const currentSprintName = currentSprintIndex !== -1 ? planning.sprintCapacity[currentSprintIndex].sprint : null;
+
                 // Als de due date voor de sprint start, moet het issue in een eerdere sprint
-                if (dueDate < sprintStartDate) {
+                // MAAR alleen als het niet de huidige sprint is
+                if (dueDate < sprintStartDate && sprintName !== currentSprintName) {
                     logger.info(`\nFout: Issue ${issue.key} heeft een due date (${dueDate.toISOString()}) voor sprint ${sprintName} (${sprintStartDate.toISOString()})`);
                     
                     // Vind de eerste sprint die na de due date start
@@ -134,9 +154,12 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
                     
                     if (sprintIndex !== -1) {
                         const newSprint = planning.sprints[sprintIndex].sprint;
-                        logger.info(`Issue ${issue.key} wordt verplaatst naar sprint ${newSprint}`);
-                        moveIssueAndRelated(plannedIssue, newSprint);
-                        isValid = false;
+                        // Controleer of het issue al in de juiste sprint staat
+                        if (plannedIssue.sprint !== newSprint) {
+                            logger.info(`Issue ${issue.key} wordt verplaatst naar sprint ${newSprint}`);
+                            moveIssueAndRelated(plannedIssue, newSprint);
+                            isValid = false;
+                        }
                     }
                 }
             }
@@ -241,10 +264,6 @@ export function findFirstAvailableSprint(issue: Issue, planningResult: PlanningR
     const sprintNames = [...new Set(planningResult.sprintCapacity.map(c => c.sprint))]
         .sort((a, b) => parseInt(a) - parseInt(b));
 
-    logger.info(`\nSprint informatie voor issue ${issue.key}:`);
-    logger.info(`- Sprint namen: ${sprintNames.join(', ')}`);
-    logger.info(`- Sprint capaciteit: ${JSON.stringify(planningResult.sprintCapacity.map(c => ({ sprint: c.sprint, startDate: c.startDate })))}`);
-
     // Bepaal de start sprint op basis van voorgangers en due date
     let startFromIndex = 0;
 
@@ -267,42 +286,45 @@ export function findFirstAvailableSprint(issue: Issue, planningResult: PlanningR
 
     // Bereken de start sprint index voor due date
     let dueDateStartIndex = 0;
+    const currentDate = new Date();
+    const currentSprintIndex = findSprintIndexForDate(currentDate, planningResult.sprintCapacity);
+    const currentSprintName = currentSprintIndex !== -1 ? planningResult.sprintCapacity[currentSprintIndex].sprint : null;
+
     if (dueDate) {
         const dueDateObj = new Date(dueDate);
         logger.info(`- Due date: ${dueDateObj.toISOString()}`);
-        const dueDateSprintIndex = findSprintIndexForDate(dueDateObj, planningResult.sprintCapacity);
-        logger.info(`- Due date sprint index: ${dueDateSprintIndex}`);
-        if (dueDateSprintIndex !== -1) {
-            // Als de due date in een sprint valt, gebruik die sprint
-            const sprintName = planningResult.sprintCapacity[dueDateSprintIndex].sprint;
-            dueDateStartIndex = sprintNames.indexOf(sprintName);
-            logger.info(`- Due date valt in sprint ${sprintName}, index: ${dueDateStartIndex}`);
+        
+        // Als de due date voor de huidige datum ligt, gebruik de huidige sprint
+        if (currentSprintName && dueDateObj < currentDate) {
+            dueDateStartIndex = sprintNames.indexOf(currentSprintName);
+            logger.info(`- Due date ligt voor huidige datum, gebruik huidige sprint ${currentSprintName}`);
         } else {
-            // Als de due date niet in een sprint valt, gebruik de eerste sprint na de due date
-            const firstSprintAfterDueDate = findFirstSprintAfterDate(dueDateObj, planningResult.sprintCapacity);
-            logger.info(`- Eerste sprint na due date index: ${firstSprintAfterDueDate}`);
-            if (firstSprintAfterDueDate !== -1) {
-                const sprintName = planningResult.sprintCapacity[firstSprintAfterDueDate].sprint;
+            // Zoek de sprint waar de due date in valt
+            const dueDateSprintIndex = findSprintIndexForDate(dueDateObj, planningResult.sprintCapacity);
+            logger.info(`- Due date sprint index: ${dueDateSprintIndex}`);
+            
+            if (dueDateSprintIndex !== -1) {
+                // Als de due date in een sprint valt, gebruik die sprint
+                const sprintName = planningResult.sprintCapacity[dueDateSprintIndex].sprint;
                 dueDateStartIndex = sprintNames.indexOf(sprintName);
-                logger.info(`- Eerste sprint na due date: ${sprintName}, index: ${dueDateStartIndex}`);
+                logger.info(`- Due date valt in sprint ${sprintName}, index: ${dueDateStartIndex}`);
             } else {
-                // Als er geen sprint na de due date is, gebruik de laatste sprint
+                // Als de due date niet in een sprint valt, gebruik de laatste sprint
                 dueDateStartIndex = sprintNames.length - 1;
-                logger.info(`- Geen sprint na due date gevonden, gebruik laatste sprint index: ${dueDateStartIndex}`);
+                logger.info(`- Due date valt niet in een sprint, gebruik laatste sprint index: ${dueDateStartIndex}`);
             }
         }
     } else {
         // Als er geen due date is, gebruik de huidige sprint
-        const currentDate = new Date();
-        const currentSprintIndex = findSprintIndexForDate(currentDate, planningResult.sprintCapacity);
         if (currentSprintIndex !== -1) {
             const sprintName = planningResult.sprintCapacity[currentSprintIndex].sprint;
             dueDateStartIndex = sprintNames.indexOf(sprintName);
+            logger.info(`- Geen due date, gebruik huidige sprint ${sprintName}`);
         }
     }
 
-    // Gebruik de hoogste van de twee start indices
-    startFromIndex = Math.max(predecessorStartIndex, dueDateStartIndex);
+    // Gebruik de start index voor voorgangers als er voorgangers zijn, anders gebruik de due date index
+    startFromIndex = highestPredecessorSprintIndex !== -1 ? predecessorStartIndex : dueDateStartIndex;
 
     logger.info(`\nBepalen start sprint voor issue ${issue.key}:`);
     logger.info(`- Hoogste voorganger sprint index: ${highestPredecessorSprintIndex}`);
@@ -601,6 +623,54 @@ function getWorkDaysBetween(startDate: Date, endDate: Date): number {
 }
 
 function sortIssuesByRelationsAndDueDates(issues: Issue[]): Issue[] {
+    // Helper functie om issues binnen een groep op prioriteit te sorteren
+    const sortByPriority = (group: Issue[]): Issue[] => {
+        const priorityOrder: Record<string, number> = {
+            'Highest': 0,
+            'High': 1,
+            'Medium': 2,
+            'Low': 3,
+            'Lowest': 4
+        };
+
+        return group.sort((a, b) => {
+            const priorityA = a.fields?.priority?.name || 'Lowest';
+            const priorityB = b.fields?.priority?.name || 'Lowest';
+            return (priorityOrder[priorityA] || 999) - (priorityOrder[priorityB] || 999);
+        });
+    };
+
+    // Helper functie om issues op basis van hun relaties te sorteren
+    const sortByRelations = (group: Issue[]): Issue[] => {
+        const result: Issue[] = [];
+        const processed = new Set<string>();
+
+        // Functie om een issue en zijn voorgangers toe te voegen
+        const addIssueAndPredecessors = (issue: Issue) => {
+            if (processed.has(issue.key)) return;
+            
+            // Voeg eerst alle voorgangers toe
+            const predecessors = getPredecessors(issue);
+            for (const predecessorKey of predecessors) {
+                const predecessor = group.find(i => i.key === predecessorKey);
+                if (predecessor) {
+                    addIssueAndPredecessors(predecessor);
+                }
+            }
+            
+            // Voeg dan het issue zelf toe
+            result.push(issue);
+            processed.add(issue.key);
+        };
+
+        // Verwerk alle issues
+        for (const issue of group) {
+            addIssueAndPredecessors(issue);
+        }
+
+        return result;
+    };
+
     // Groep 1: Issues die voorganger zijn van andere issues
     const predecessorIssues = issues.filter(issue => {
         const successors = getSuccessors(issue);
@@ -633,28 +703,11 @@ function sortIssuesByRelationsAndDueDates(issues: Issue[]): Issue[] {
         return predecessors.length === 0 && successors.length === 0 && !issue.fields?.duedate;
     });
 
-    // Helper functie om issues binnen een groep op prioriteit te sorteren
-    const sortByPriority = (group: Issue[]): Issue[] => {
-        const priorityOrder: Record<string, number> = {
-            'Highest': 0,
-            'High': 1,
-            'Medium': 2,
-            'Low': 3,
-            'Lowest': 4
-        };
-
-        return group.sort((a, b) => {
-            const priorityA = a.fields?.priority?.name || 'Lowest';
-            const priorityB = b.fields?.priority?.name || 'Lowest';
-            return (priorityOrder[priorityA] || 999) - (priorityOrder[priorityB] || 999);
-        });
-    };
-
     // Combineer alle groepen in de juiste volgorde
     return [
-        ...sortByPriority(predecessorIssues),
-        ...sortByPriority(issuesWithPredecessors),
-        ...sortByPriority(successorIssues),
+        ...sortByRelations(sortByPriority(predecessorIssues)),
+        ...sortByRelations(sortByPriority(issuesWithPredecessors)),
+        ...sortByRelations(sortByPriority(successorIssues)),
         ...sortByPriority(issuesWithDueDate),
         ...sortByPriority(issuesWithoutDueDate)
     ];
@@ -964,6 +1017,13 @@ export async function calculatePlanning(
 
     // Plan elk issue
     for (const issue of sortedIssues) {
+        // Controleer eerst of het issue al gepland is
+        const existingPlanning = planningResult.plannedIssues.find(pi => pi.issue.key === issue.key);
+        if (existingPlanning) {
+            logger.info(`Issue ${issue.key} is al gepland in sprint ${existingPlanning.sprint}, overslaan...`);
+            continue;
+        }
+
         const sprint = findFirstAvailableSprint(issue, planningResult);
         if (sprint) {
             const assignee = getAssigneeName(issue.fields?.assignee);
