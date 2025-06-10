@@ -341,13 +341,17 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                     const sprintStartDate = projectConfig.sprintStartDate;
                     const sprintDuration = 14; // 2 weken per sprint
                     
-                    // Bereken de start- en einddatum van sprint 1
+                    // Bereken de start- en einddatum van de huidige sprint
                     const sprintStart = new Date(sprintStartDate);
+                    sprintStart.setDate(sprintStart.getDate() + ((sprintNumber - 1) * sprintDuration));
                     const sprintEnd = new Date(sprintStart);
                     sprintEnd.setDate(sprintStart.getDate() + sprintDuration - 1);
 
-                    // Voor sprint 1: bereken capaciteit op basis van resterende werkdagen
-                    if (sprintNumber === 1) {
+                    const currentDate = new Date();
+                    currentDate.setHours(0, 0, 0, 0);
+
+                    // Voor de huidige sprint: bereken capaciteit op basis van resterende werkdagen
+                    if (currentDate >= sprintStart && currentDate <= sprintEnd) {
                         // Bereken het aantal resterende werkdagen (inclusief vandaag)
                         const remainingWorkDays = getWorkDaysBetween(currentDate, sprintEnd);
                         const totalWorkDaysInSprint = 10; // 2 weken = 10 werkdagen
