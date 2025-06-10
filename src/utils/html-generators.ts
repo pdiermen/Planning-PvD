@@ -42,8 +42,21 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
         }))
     })}`);
 
+    // Verzamel alle beschikbare sprints uit sprintHours en sprintCapacity
+    const availableSprints = new Set<string>();
+    
+    // Voeg sprints toe uit sprintHours
+    if (planning.sprintHours) {
+        Object.keys(planning.sprintHours).forEach(sprint => availableSprints.add(sprint));
+    }
+    
+    // Voeg sprints toe uit sprintCapacity
+    if (planning.sprintCapacity) {
+        planning.sprintCapacity.forEach(capacity => availableSprints.add(capacity.sprint));
+    }
+
     // Filter sprints waar issues in zijn gepland
-    const availableSprintNames = Object.keys(planning.sprintHours)
+    const availableSprintNames = Array.from(availableSprints)
         .filter(sprint => {
             // Check of er issues zijn gepland in deze sprint
             const hasPlannedIssues = planning.plannedIssues.some(pi => pi.sprint === sprint);
@@ -55,16 +68,45 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
 
     logger.info(`Beschikbare sprints: ${JSON.stringify(availableSprintNames)}`);
 
-    const employeeData: { [key: string]: { [key: string]: { available: number; planned: number; remaining: number } } } = {};
+    // Verzamel eerst alle actieve medewerkers per project
+    const activeEmployees = new Set<string>();
+    const projectEmployees = new Map<string, Set<string>>(); // Map van project naar set van medewerkers
 
-    // Verwerk sprint capaciteit alleen voor actieve medewerkers op het project
     if (planning.sprintCapacity) {
         for (const capacity of planning.sprintCapacity) {
-            // Alleen capaciteiten voor het specifieke project meenemen
             if (capacity.project && capacity.project !== '') {
-                if (!employeeData[capacity.employee]) {
-                    employeeData[capacity.employee] = {};
+                activeEmployees.add(capacity.employee);
+                
+                // Voeg medewerker toe aan project
+                if (!projectEmployees.has(capacity.project)) {
+                    projectEmployees.set(capacity.project, new Set<string>());
                 }
+                projectEmployees.get(capacity.project)?.add(capacity.employee);
+            }
+        }
+    }
+
+    // Verzamel alle medewerkers die issues hebben
+    const employeesWithIssues = new Set<string>();
+    for (const plannedIssue of planning.plannedIssues) {
+        employeesWithIssues.add(plannedIssue.assignee);
+    }
+
+    // Combineer de sets om unieke medewerkers te krijgen
+    const allEmployees = new Set([...activeEmployees, ...employeesWithIssues]);
+    logger.info(`Alle unieke medewerkers: ${Array.from(allEmployees).join(', ')}`);
+
+    const employeeData: { [key: string]: { [key: string]: { available: number; planned: number; remaining: number } } } = {};
+
+    // Initialiseer employeeData voor alle unieke medewerkers
+    for (const employee of allEmployees) {
+        employeeData[employee] = {};
+    }
+
+    // Verwerk sprint capaciteit
+    if (planning.sprintCapacity) {
+        for (const capacity of planning.sprintCapacity) {
+            if (capacity.project && capacity.project !== '') {
                 if (!employeeData[capacity.employee][capacity.sprint]) {
                     // Zet effectieve uren op 0 voor Peter van Diermen en Unassigned
                     const available = (capacity.employee === 'Peter van Diermen' || capacity.employee === 'Unassigned') ? 0 : capacity.capacity;
@@ -75,16 +117,6 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
                     };
                 }
             }
-        }
-    }
-
-    logger.info(`Employee data na capaciteit: ${JSON.stringify(employeeData, null, 2)}`);
-
-    // Initialiseer employeeData voor alle medewerkers die issues hebben
-    for (const plannedIssue of planning.plannedIssues) {
-        const { assignee } = plannedIssue;
-        if (!employeeData[assignee]) {
-            employeeData[assignee] = {};
         }
     }
 
@@ -102,8 +134,6 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
         employeeData[assignee][sprint].remaining = employeeData[assignee][sprint].available - employeeData[assignee][sprint].planned;
     }
 
-    logger.info(`Employee data na berekening geplande uren: ${JSON.stringify(employeeData, null, 2)}`);
-
     let html = '<table class="table table-striped table-bordered" style="width: 100%;">';
     html += '<thead><tr class="table-dark text-dark">';
     html += '<th style="width: 10%;">Sprint</th>';
@@ -120,9 +150,21 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
         let sprintTotalRemaining = 0;
         let sprintTotalIssues = 0;
 
-        // Toon alle actieve medewerkers
-        for (const [employee, sprintData] of Object.entries(employeeData)) {
-            const data = sprintData[sprint];
+        // Bepaal het project voor deze sprint
+        const sprintProject = planning.sprintCapacity?.find(c => c.sprint === sprint)?.project || '';
+        const sprintEmployees = sprintProject ? projectEmployees.get(sprintProject) || new Set<string>() : new Set<string>();
+
+        // Toon alleen medewerkers die bij het project horen of issues hebben
+        for (const employee of allEmployees) {
+            // Toon de medewerker alleen als ze bij het project horen of issues hebben in deze sprint
+            const hasIssuesInSprint = planning.plannedIssues.some(pi => 
+                pi.sprint === sprint && 
+                getAssigneeName(pi.issue.fields?.assignee) === employee
+            );
+            
+            if (!sprintEmployees.has(employee) && !hasIssuesInSprint) continue;
+
+            const data = employeeData[employee][sprint];
             if (data) {
                 const plannedIssues = planning.plannedIssues.filter(pi => 
                     pi.sprint === sprint && 
@@ -140,16 +182,10 @@ export function generateSprintHoursTable(planning: PlanningResult, sprintNames: 
                 // Format de geplande issues met rode tekst voor issues die te laat zijn ingepland
                 const formattedIssues = plannedIssues.map(pi => {
                     const issueDueDate = pi.issue.fields?.duedate ? new Date(pi.issue.fields.duedate) : null;
-                    
-                    // Vind de sprint informatie voor dit issue
                     const sprintInfo = planning.sprints.find(s => s.sprint === sprint);
                     const sprintStartDate = sprintInfo?.startDate ? new Date(sprintInfo.startDate) : null;
-                    
-                    // Een issue is te laat als de due date vóór de sprint startdatum ligt
                     const isOverdue = issueDueDate && sprintStartDate && issueDueDate < sprintStartDate;
                     const issueText = `${pi.issue.key} (${pi.hours.toFixed(1)} uur)`;
-                    
-                    // Gebruik een span met alleen rode kleur
                     return isOverdue ? `<span style="color: red !important;">${issueText}</span>` : issueText;
                 }).join('<br>');
 
