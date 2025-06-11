@@ -114,7 +114,7 @@ export async function getActiveIssues(): Promise<Issue[]> {
         // Log de JQL query voor debugging
         logger.info(`[DEBUG] JQL query: ${jql}`);
         
-        const response = await jiraClient.get('/rest/api/2/search', {
+        const response = await jiraClient.get('/search', {
             params: {
                 jql,
                 startAt,
@@ -161,26 +161,19 @@ export async function getWorkLogs(projectKey: string, startDate: string, endDate
         }
         logger.info(`Volledige JQL Query voor Worklogs: ${jql}`);
         
-        const response = await axios.get(
-            `https://${JIRA_DOMAIN}/rest/api/3/search`,
-            {
-                headers: {
-                    'Authorization': `Basic ${Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString('base64')}`,
-                    'Content-Type': 'application/json'
-                },
-                params: {
-                    jql,
-                    fields: [
-                        'summary',
-                        'status',
-                        'assignee',
-                        'priority',
-                        'worklog'
-                    ].join(','),
-                    maxResults: 100
-                }
+        const response = await jiraClient.get('/search', {
+            params: {
+                jql,
+                fields: [
+                    'summary',
+                    'status',
+                    'assignee',
+                    'priority',
+                    'worklog'
+                ].join(','),
+                maxResults: 100
             }
-        );
+        });
         
         const worklogs: WorkLog[] = [];
         
@@ -581,21 +574,14 @@ export async function getWorklogsForIssues(issues: Issue[]): Promise<WorkLog[]> 
         let totalIssues = 0;
 
         while (hasMore) {
-            const response = await axios.get(
-                `https://${JIRA_DOMAIN}/rest/api/3/search`,
-                {
-                    headers: {
-                        'Authorization': `Basic ${Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString('base64')}`,
-                        'Content-Type': 'application/json'
-                    },
-                    params: {
-                        jql: worklogIssuesJql,
-                        fields: ['worklog', 'summary', 'status', 'assignee', 'priority'],
-                        startAt,
-                        maxResults
-                    }
+            const response = await jiraClient.get('/search', {
+                params: {
+                    jql: worklogIssuesJql,
+                    fields: ['worklog', 'summary', 'status', 'assignee', 'priority'],
+                    startAt,
+                    maxResults
                 }
-            );
+            });
             
             const batchIssues = response.data.issues;
             totalIssues = response.data.total;
@@ -651,33 +637,26 @@ export async function getIssuesWithWorklogs(startDate: string, endDate: string):
         let totalIssues = 0;
 
         while (hasMore) {
-            const response = await axios.get(
-                `https://${JIRA_DOMAIN}/rest/api/3/search`,
-                {
-                    headers: {
-                        'Authorization': `Basic ${Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString('base64')}`,
-                        'Content-Type': 'application/json'
-                    },
-                    params: {
-                        jql,
-                        fields: [
-                            'summary',
-                            'status',
-                            'assignee',
-                            'issuetype',
-                            'priority',
-                            'timeestimate',
-                            'timeoriginalestimate',
-                            'issuelinks',
-                            'parent',
-                            'customfield_10020',
-                            'worklog'
-                        ].join(','),
-                        startAt,
-                        maxResults
-                    }
+            const response = await jiraClient.get('/search', {
+                params: {
+                    jql,
+                    fields: [
+                        'summary',
+                        'status',
+                        'assignee',
+                        'issuetype',
+                        'priority',
+                        'timeestimate',
+                        'timeoriginalestimate',
+                        'issuelinks',
+                        'parent',
+                        'customfield_10020',
+                        'worklog'
+                    ].join(','),
+                    startAt,
+                    maxResults
                 }
-            );
+            });
             
             const batchIssues = response.data.issues;
             allIssues.push(...batchIssues);
@@ -729,4 +708,106 @@ export async function getIssues(jqlFilter: string): Promise<Issue[]> {
         logger.error(`Error bij ophalen van issues: ${error instanceof Error ? error.message : error}`);
         throw error;
     }
+}
+
+interface JiraIssue {
+    key: string;
+    summary: string;
+    status: string;
+    type: string;
+    parent?: string;
+}
+
+export async function getAllLinkedIssues(issueKey: string): Promise<JiraIssue[]> {
+    // Valideer de issue key
+    if (!issueKey || typeof issueKey !== 'string' || !issueKey.match(/^[A-Z]+-\d+$/)) {
+        throw new Error(`Ongeldige issue key: ${issueKey}. Verwacht formaat: PROJECT-123`);
+    }
+
+    const allIssues: JiraIssue[] = [];
+    const processedIssues = new Set<string>();
+    const issuesToProcess = [issueKey];
+    const startIssueKey = issueKey; // Bewaar het start issue voor later gebruik
+
+    logger.info(`Starting to process issues. Initial issue: ${issueKey}`);
+
+    while (issuesToProcess.length > 0) {
+        const currentIssueKey = issuesToProcess.shift()!;
+        logger.info(`Processing issue: ${currentIssueKey}. Remaining issues to process: ${issuesToProcess.length}`);
+        
+        if (processedIssues.has(currentIssueKey)) {
+            logger.info(`Skipping already processed issue: ${currentIssueKey}`);
+            continue;
+        }
+        processedIssues.add(currentIssueKey);
+
+        // Skip REAL-1249 zonder child issues op te halen
+        if (currentIssueKey === 'REAL-1249') {
+            logger.info(`Skipping REAL-1249 without fetching child issues`);
+            continue;
+        }
+
+        const jql = `issue in linkedIssues("${currentIssueKey}")`;
+        logger.info(`Executing JQL query: ${jql}`);
+        
+        let startAt = 0;
+        const maxResults = 100;
+        let hasMore = true;
+        let linkedIssues: JiraIssue[] = [];
+
+        while (hasMore) {
+            logger.info(`Fetching batch of issues for ${currentIssueKey}. Start at: ${startAt}, max results: ${maxResults}`);
+            
+            const response = await jiraClient.get('/search', {
+                params: {
+                    jql,
+                    startAt,
+                    maxResults,
+                    fields: ['summary', 'status', 'issuetype', 'parent'].join(',')
+                }
+            });
+
+            const batchIssues = response.data.issues.map((issue: any) => ({
+                key: issue.key,
+                summary: issue.fields.summary,
+                status: issue.fields.status.name,
+                type: issue.fields.issuetype.name,
+                parent: issue.fields.parent?.key
+            }));
+
+            logger.info(`Retrieved ${batchIssues.length} issues in current batch`);
+            linkedIssues.push(...batchIssues);
+            
+            // Controleer of er meer issues zijn
+            hasMore = response.data.startAt + response.data.maxResults < response.data.total;
+            startAt += maxResults;
+            logger.info(`Has more issues: ${hasMore}, new startAt: ${startAt}`);
+        }
+
+        logger.info(`Found total of ${linkedIssues.length} linked issues for ${currentIssueKey}`);
+        
+        // Voeg alleen AMP issues toe aan het resultaat
+        const ampIssues = linkedIssues.filter(issue => issue.key.startsWith('AMP'));
+        allIssues.push(...ampIssues);
+        logger.info(`Added ${ampIssues.length} AMP issues to results`);
+
+        // Voor het start issue altijd child issues ophalen, voor andere issues alleen als het type Offerte is
+        const currentIssue = linkedIssues.find((issue: JiraIssue) => issue.key === currentIssueKey);
+        const shouldProcessChildren = currentIssueKey === startIssueKey || (currentIssue && currentIssue.type === 'Offerte');
+
+        if (shouldProcessChildren) {
+            logger.info(`Issue ${currentIssueKey} is ${currentIssueKey === startIssueKey ? 'the start issue' : 'of type Offerte'}, will process its child issues`);
+            // Alleen issues toevoegen die nog niet zijn verwerkt
+            const newIssuesToProcess = linkedIssues
+                .filter(issue => !processedIssues.has(issue.key))
+                .map(issue => issue.key);
+            issuesToProcess.push(...newIssuesToProcess);
+            logger.info(`Added ${newIssuesToProcess.length} new issues to process`);
+        } else {
+            logger.info(`Issue ${currentIssueKey} is not the start issue and not of type Offerte (type: ${currentIssue?.type}), skipping child issues`);
+        }
+    }
+
+    logger.info(`Finished processing all issues. Total AMP issues found: ${allIssues.length}`);
+    return allIssues;
 }
