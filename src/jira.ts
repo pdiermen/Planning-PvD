@@ -747,6 +747,21 @@ export async function getAllLinkedIssues(issueKey: string): Promise<JiraIssue[]>
             continue;
         }
 
+        // Haal eerst het huidige issue op om het type te bepalen
+        const currentIssueResponse = await jiraClient.get(`/issue/${currentIssueKey}`, {
+            params: {
+                fields: ['summary', 'status', 'issuetype', 'parent'].join(',')
+            }
+        });
+        const currentIssue = {
+            key: currentIssueResponse.data.key,
+            summary: currentIssueResponse.data.fields.summary,
+            status: currentIssueResponse.data.fields.status.name,
+            type: currentIssueResponse.data.fields.issuetype.name,
+            parent: currentIssueResponse.data.fields.parent?.key
+        };
+        logger.info(`Current issue ${currentIssueKey} is of type: ${currentIssue.type}`);
+
         const jql = `issue in linkedIssues("${currentIssueKey}")`;
         logger.info(`Executing JQL query: ${jql}`);
         
@@ -786,14 +801,13 @@ export async function getAllLinkedIssues(issueKey: string): Promise<JiraIssue[]>
 
         logger.info(`Found total of ${linkedIssues.length} linked issues for ${currentIssueKey}`);
         
-        // Voeg alleen AMP issues toe aan het resultaat
-        const ampIssues = linkedIssues.filter(issue => issue.key.startsWith('AMP'));
-        allIssues.push(...ampIssues);
-        logger.info(`Added ${ampIssues.length} AMP issues to results`);
+        // Voeg alleen AMP en KAMP issues toe aan het resultaat
+        const ampAndKampIssues = linkedIssues.filter(issue => issue.key.startsWith('AMP') || issue.key.startsWith('KAMP'));
+        allIssues.push(...ampAndKampIssues);
+        logger.info(`Added ${ampAndKampIssues.length} AMP/KAMP issues to results`);
 
         // Voor het start issue altijd child issues ophalen, voor andere issues alleen als het type Offerte is
-        const currentIssue = linkedIssues.find((issue: JiraIssue) => issue.key === currentIssueKey);
-        const shouldProcessChildren = currentIssueKey === startIssueKey || (currentIssue && currentIssue.type === 'Offerte');
+        const shouldProcessChildren = currentIssueKey === startIssueKey || currentIssue.type === 'Offerte';
 
         if (shouldProcessChildren) {
             logger.info(`Issue ${currentIssueKey} is ${currentIssueKey === startIssueKey ? 'the start issue' : 'of type Offerte'}, will process its child issues`);
@@ -804,10 +818,10 @@ export async function getAllLinkedIssues(issueKey: string): Promise<JiraIssue[]>
             issuesToProcess.push(...newIssuesToProcess);
             logger.info(`Added ${newIssuesToProcess.length} new issues to process`);
         } else {
-            logger.info(`Issue ${currentIssueKey} is not the start issue and not of type Offerte (type: ${currentIssue?.type}), skipping child issues`);
+            logger.info(`Issue ${currentIssueKey} is not the start issue and not of type Offerte (type: ${currentIssue.type}), skipping child issues`);
         }
     }
 
-    logger.info(`Finished processing all issues. Total AMP issues found: ${allIssues.length}`);
+    logger.info(`Finished processing all issues. Total AMP/KAMP issues found: ${allIssues.length}`);
     return allIssues;
 }

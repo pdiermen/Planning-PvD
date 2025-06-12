@@ -5,6 +5,7 @@ import { getSuccessors, getPredecessors } from '../utils/jira-helpers.js';
 import { getAssigneeName } from '../utils/assignee.js';
 import { getProjectConfigsFromSheet } from '../google-sheets.js';
 import { calculateCurrentSprint } from '../utils/date-utils.js';
+import { getAllLinkedIssues } from '../jira.js';
 
 // Definieer de volgorde van statussen
 export const STATUS_ORDER: Record<string, number> = {
@@ -955,6 +956,19 @@ export async function calculatePlanning(
 
     logger.info(`\nBereken planning voor project ${projectConfig.project}`);
 
+    // Voor het project "Klantprojecten", haal eerst alle AMP issues op die niet gepland hoeven te worden
+    let issuesToPlan = [...issues];
+    if (projectConfig.project === 'Klantprojecten') {
+        logger.info('Project is Klantprojecten, haal AMP issues op die niet gepland hoeven te worden');
+        const ampIssues = await getAllLinkedIssues('REAL-2240');
+        const ampIssueKeys = new Set(ampIssues.map(issue => issue.key));
+        
+        // Filter de AMP issues uit de lijst met issues die gepland moeten worden
+        issuesToPlan = issues.filter(issue => !ampIssueKeys.has(issue.key));
+        logger.info(`Aantal AMP issues gevonden: ${ampIssues.length}`);
+        logger.info(`Aantal issues na filteren van AMP issues: ${issuesToPlan.length}`);
+    }
+
     // Haal sprint capaciteiten op uit Google Sheets
     const sprintCapacities = await getSprintCapacityFromSheet(googleSheetsData);
     logger.info(`Aantal gevonden sprint capaciteiten: ${sprintCapacities.length}`);
@@ -999,7 +1013,7 @@ export async function calculatePlanning(
     logger.info(`Sprint index: ${sprintIndex}`);
 
     // Sorteer issues op basis van relaties en due dates
-    const sortedIssues = sortIssuesByRelationsAndDueDates(issues);
+    const sortedIssues = sortIssuesByRelationsAndDueDates(issuesToPlan);
     logger.info(`Aantal issues om te plannen: ${sortedIssues.length}`);
 
     // Initialiseer planning resultaat
