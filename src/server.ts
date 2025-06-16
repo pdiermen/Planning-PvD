@@ -321,45 +321,28 @@ app.get('/worklogs', (req, res) => {
 
 app.get('/', async (req, res) => {
     try {
-        // Haal eerst project configuraties op
-        let projectSheetsData;
-        try {
-            projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
-        } catch (error) {
-            console.error('Error bij ophalen van project configuraties:', error);
-            throw error;
-        }
-
-        // Haal project configuraties op
+        // Haal project configuraties op uit Google Sheet
+        const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
         const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
         logger.info(`Aantal project configuraties gevonden: ${projectConfigs.length}`);
-        logger.info('Gevonden project configuraties:');
-        projectConfigs.forEach(config => {
-            logger.info(`- Project: ${config.project}, Sprint startdatum: ${config.sprintStartDate}`);
-        });
-        
-        // Haal employee data op
-        let employeeSheetsData: (string | null)[][] | null = null;
+
+        // Haal Google Sheets data op
+        let employeeSheetsData;
         try {
             employeeSheetsData = await getGoogleSheetsData('Employees!A1:H');
         } catch (error) {
-            console.error('Error bij ophalen van employee data:', error);
+            console.error('Error bij ophalen van Google Sheets data:', error);
             throw error;
         }
-        
+
         // Haal issues op voor elk project
         const projectIssues = new Map<string, JiraIssue[]>();
         for (const config of projectConfigs) {
-            try {
-                const issues = await getIssuesForProject(config);
-                projectIssues.set(config.project, issues);
-            } catch (error) {
-                console.error(`Error bij ophalen issues voor project ${config.project}:`, error);
-                projectIssues.set(config.project, []);
-            }
+            const issues = await getIssuesForProject(config);
+            projectIssues.set(config.project, issues);
         }
 
-        // Haal sprint namen op voor alle issues
+        // Haal sprint namen op
         const sprintNames = new Map<string, string>();
         for (const issues of projectIssues.values()) {
             for (const issue of issues) {
@@ -753,7 +736,7 @@ async function generateHtml(
                 <div class="row mb-4">
                     <div class="col">
                         <h4>Planning Tabel</h4>
-                        ${generateSprintHoursTable(planning, sprintNames)}
+                        ${await generateSprintHoursTable(planning)}
                     </div>
                 </div>
                 <div class="row mb-4">
@@ -904,12 +887,6 @@ function generateIssuesTable(issues: JiraIssue[], planning: PlanningResult, spri
                                 const dueDateOnly = new Date(dueDateObj.getFullYear(), dueDateObj.getMonth(), dueDateObj.getDate());
                                 const sprintStartDateOnly = new Date(sprintStartDate.getFullYear(), sprintStartDate.getMonth(), sprintStartDate.getDate());
                                 isOverdue = dueDateOnly < sprintStartDateOnly;
-                                
-                                // Debug logging
-                                logger.info(`\nDue date check voor issue ${issue.key}:`);
-                                logger.info(`- Due date: ${dueDateOnly.toLocaleDateString('nl-NL')}`);
-                                logger.info(`- Sprint start date: ${sprintStartDateOnly.toLocaleDateString('nl-NL')}`);
-                                logger.info(`- Is overdue: ${isOverdue}`);
                             }
                         }
                         
@@ -1894,12 +1871,27 @@ const projects: Project[] = [
 async function loadWorklogs() {
   try {
     const employees = await getGoogleSheetsData('Employees!A1:H');
+    if (!employees) {
+      logger.error('Geen employee data beschikbaar uit Google Sheets');
+      return {
+        worklogs: [],
+        projectEmployees: []
+      };
+    }
+
     const projectEmployees = employees.map((row: string[]) => row[0]); // Eerste kolom bevat de medewerkersnamen
 
     // Haal worklogs op voor alle projecten
     const worklogs = await Promise.all(
       projects.map(async (project: Project) => {
         const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
+        if (!projectSheetsData) {
+          logger.error(`Geen project data beschikbaar voor ${project.name}`);
+          return {
+            project,
+            worklogs: []
+          };
+        }
         const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
         const config = projectConfigs.find(c => c.project === project.name);
         const projectWorklogs = await getWorkLogsForProject(
@@ -1919,7 +1911,7 @@ async function loadWorklogs() {
       projectEmployees
     };
   } catch (error) {
-    console.error('Error loading worklogs:', error);
+    logger.error(`Error loading worklogs: ${error instanceof Error ? error.message : error}`);
     return {
       worklogs: [],
       projectEmployees: []
@@ -1975,14 +1967,11 @@ async function getProjectConfigs() {
 }
 
 app.get('/api/planning', async (req, res) => {
-    console.log('\n=== DEBUG: API ENDPOINT AANGEROEPEN ===');
-    console.log('Planning API endpoint wordt aangeroepen');
-    console.log('================================\n');
     try {
         // Haal project configuraties op uit Google Sheets
         const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
         const projectConfigs = await getProjectConfigsFromSheet(projectSheetsData);
-        console.log(`Aantal project configuraties gevonden: ${projectConfigs.length}`);
+        logger.info(`Aantal project configuraties gevonden: ${projectConfigs.length}`);
 
         // Haal employee data op uit Google Sheets
         const employeeSheetsData = await getGoogleSheetsData('Employees!A1:H');
@@ -1990,11 +1979,11 @@ app.get('/api/planning', async (req, res) => {
         // Verwerk elk project
         const planningResults = [];
         for (const config of projectConfigs) {
-            console.log(`\nVerwerken van project: ${config.project}`);
+            logger.info(`\nVerwerken van project: ${config.project}`);
             
             // Haal issues op voor dit project
             const issues = await getIssuesForProject(config);
-            console.log(`Aantal issues gevonden voor ${config.project}: ${issues.length}`);
+            logger.info(`Aantal issues gevonden voor ${config.project}: ${issues.length}`);
 
             // Bereken planning voor dit project
             const planningResult = await calculatePlanning(config, issues, employeeSheetsData || []);
@@ -2004,9 +1993,33 @@ app.get('/api/planning', async (req, res) => {
             });
         }
 
-        res.json(planningResults);
+        // Combineer alle planning resultaten
+        const combinedPlanning: PlanningResult = {
+            sprintCapacity: planningResults.flatMap(r => r.planning.sprintCapacity || []),
+            sprintHours: Object.assign({}, ...planningResults.map(r => r.planning.sprintHours || {})),
+            plannedIssues: planningResults.flatMap(r => r.planning.plannedIssues || []),
+            sprints: planningResults.flatMap(r => r.planning.sprints || []),
+            projectConfigs: projectConfigs,
+            issues: planningResults.flatMap(r => r.planning.issues || []),
+            sprintAssignments: Object.assign({}, ...planningResults.map(r => r.planning.sprintAssignments || {})),
+            employeeSprintUsedHours: Object.assign({}, ...planningResults.map(r => r.planning.employeeSprintUsedHours || {})),
+            currentSprint: planningResults[0]?.planning.currentSprint || '1',
+            capacityFactor: planningResults[0]?.planning.capacityFactor || 1
+        };
+
+        const sprintNames = new Map<string, string>();
+        if (combinedPlanning.sprints) {
+            combinedPlanning.sprints.forEach(sprint => {
+                sprintNames.set(sprint.sprint, sprint.sprint); // Gebruik sprint nummer als naam
+            });
+        }
+        const sprintHoursTable = await generateSprintHoursTable(combinedPlanning);
+        res.json({ 
+            planning: combinedPlanning, 
+            sprintHoursTable: sprintHoursTable 
+        });
     } catch (error) {
-        console.error('Fout bij ophalen planning:', error);
-        res.status(500).json({ error: 'Fout bij ophalen planning' });
+        logger.error(`Error in /api/planning: ${error instanceof Error ? error.message : error}`);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });

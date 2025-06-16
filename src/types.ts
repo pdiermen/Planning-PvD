@@ -165,6 +165,7 @@ export interface PlannedIssue {
     key: string;
     worklogHours?: number;
     remainingEstimate?: number;
+    project: string;
 }
 
 export interface SprintCapacity {
@@ -192,4 +193,5 @@ export interface PlanningResult {
     employeeSprintUsedHours: Record<string, Record<string, number>>;
     currentSprint: string;
     capacityFactor: number;
+    projectConfigs?: ProjectConfig[];
 } 
