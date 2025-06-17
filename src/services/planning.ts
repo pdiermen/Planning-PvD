@@ -37,56 +37,82 @@ const validatePlanningOrder = (planning: PlanningResult): boolean => {
             return;
         }
 
-        // Verplaats het issue
-        const oldSprint = issue.sprint;
-        issue.sprint = newSprint;
-
-        // Update sprintHours
-        const oldSprintHours = planning.sprintHours[oldSprint];
-        if (oldSprintHours) {
-            const issueHours = oldSprintHours[issue.assignee] || 0;
-            if (issueHours > 0) {
-                // Verwijder uit oude sprint
-                planning.sprintHours[oldSprint][issue.assignee] -= issueHours;
-                
-                // Voeg toe aan nieuwe sprint
-                if (!planning.sprintHours[newSprint]) {
-                    planning.sprintHours[newSprint] = {};
+        // Als het issue naar sprint 100 gaat, verplaats dan ook alle opvolgers naar sprint 100
+        if (newSprint === '100') {
+            const successors = getSuccessors(issue.issue);
+            for (const successorKey of successors) {
+                const successor = planning.plannedIssues.find(pi => pi.issue.key === successorKey);
+                if (successor && !processedIssues.has(successorKey)) {
+                    logger.info(`Opvolger ${successorKey} wordt verplaatst naar sprint 100`);
+                    moveIssueAndRelated(successor, '100');
                 }
-                if (!planning.sprintHours[newSprint][issue.assignee]) {
-                    planning.sprintHours[newSprint][issue.assignee] = 0;
-                }
-                planning.sprintHours[newSprint][issue.assignee] += issueHours;
-
-                // Update employeeSprintUsedHours
-                if (!planning.employeeSprintUsedHours[issue.assignee]) {
-                    planning.employeeSprintUsedHours[issue.assignee] = {};
-                }
-                // Verwijder uit oude sprint
-                planning.employeeSprintUsedHours[issue.assignee][oldSprint] -= issueHours;
-                // Voeg toe aan nieuwe sprint
-                if (!planning.employeeSprintUsedHours[issue.assignee][newSprint]) {
-                    planning.employeeSprintUsedHours[issue.assignee][newSprint] = 0;
-                }
-                planning.employeeSprintUsedHours[issue.assignee][newSprint] += issueHours;
             }
         }
 
-        // Update sprintAssignments
+        // Sla de oude sprint en uren op
+        const oldSprint = issue.sprint;
+        const issueHours = issue.hours;
+
+        // Verwijder de uren uit de oude sprint
+        if (planning.sprintHours[oldSprint]?.[issue.assignee]) {
+            planning.sprintHours[oldSprint][issue.assignee] -= issueHours;
+        }
+        if (planning.employeeSprintUsedHours[issue.assignee]?.[oldSprint]) {
+            planning.employeeSprintUsedHours[issue.assignee][oldSprint] -= issueHours;
+        }
+
+        // Verwijder het issue uit de oude sprint assignments
         if (planning.sprintAssignments[oldSprint]?.[issue.assignee]) {
             planning.sprintAssignments[oldSprint][issue.assignee] = 
                 planning.sprintAssignments[oldSprint][issue.assignee].filter(i => i.key !== issue.issue.key);
         }
-        if (!planning.sprintAssignments[newSprint]) {
-            planning.sprintAssignments[newSprint] = {};
+
+        // Gebruik planIssue om het issue te verplaatsen
+        const projectConfig = planning.projectConfigs?.[0];
+        if (!projectConfig) {
+            logger.error('Geen project configuratie gevonden');
+            return;
         }
-        if (!planning.sprintAssignments[newSprint][issue.assignee]) {
-            planning.sprintAssignments[newSprint][issue.assignee] = [];
+
+        const result = planIssue(
+            issue.issue,
+            newSprint,
+            planning.sprints.reduce((acc, s) => {
+                if (s.startDate) {
+                    const startDate = new Date(s.startDate);
+                    const endDate = new Date(startDate);
+                    endDate.setDate(startDate.getDate() + 13); // Sprint duurt 14 dagen
+                    acc[s.sprint] = { start: startDate, end: endDate };
+                }
+                return acc;
+            }, {} as { [key: string]: { start: Date; end: Date } }),
+            new Date(),
+            planning.sprintCapacity.map(sc => ({
+                name: sc.employee,
+                capacity: sc.capacity
+            })),
+            planning.sprintCapacity,
+            planning,
+            projectConfig
+        );
+
+        if (!result.success) {
+            logger.error(`Kon issue ${issue.issue.key} niet verplaatsen naar sprint ${newSprint}: ${result.reason}`);
+            // Herstel de oude sprint als het verplaatsen mislukt
+            if (planning.sprintHours[oldSprint]?.[issue.assignee]) {
+                planning.sprintHours[oldSprint][issue.assignee] += issueHours;
+            }
+            if (planning.employeeSprintUsedHours[issue.assignee]?.[oldSprint]) {
+                planning.employeeSprintUsedHours[issue.assignee][oldSprint] += issueHours;
+            }
+            if (planning.sprintAssignments[oldSprint]?.[issue.assignee]) {
+                planning.sprintAssignments[oldSprint][issue.assignee].push(issue.issue);
+            }
+            return;
         }
-        // Controleer of het issue al in de nieuwe sprint staat
-        if (!planning.sprintAssignments[newSprint][issue.assignee].some(i => i.key === issue.issue.key)) {
-            planning.sprintAssignments[newSprint][issue.assignee].push(issue.issue);
-        }
+
+        // Update het issue object met de nieuwe sprint
+        issue.sprint = newSprint;
 
         // Verplaats voorgangers naar een eerdere sprint
         const predecessors = getPredecessors(issue.issue);
@@ -266,6 +292,11 @@ export function findFirstAvailableSprint(issue: Issue, planningResult: PlanningR
     const sprintNames = [...new Set(planningResult.sprintCapacity.map(c => c.sprint))]
         .sort((a, b) => parseInt(a) - parseInt(b));
 
+    // Zorg ervoor dat sprint 100 altijd beschikbaar is
+    if (!sprintNames.includes('100')) {
+        sprintNames.push('100');
+    }
+
     // Bepaal de start sprint op basis van voorgangers en due date
     let startFromIndex = 0;
 
@@ -322,17 +353,32 @@ export function findFirstAvailableSprint(issue: Issue, planningResult: PlanningR
     // Gebruik de start index voor voorgangers als er voorgangers zijn, anders gebruik de due date index
     startFromIndex = highestPredecessorSprintIndex !== -1 ? predecessorStartIndex : dueDateStartIndex;
 
-
     // Zoek de eerste sprint met voldoende capaciteit vanaf de berekende start sprint
     for (let i = startFromIndex; i < sprintNames.length; i++) {
         const sprintName = sprintNames[i];
-        const availableCapacity = getAvailableCapacity(sprintName, assignee, planningResult);
+        
+        // Sprint 100 is altijd beschikbaar
+        if (sprintName === '100') {
+            // Als een issue in sprint 100 wordt geplaatst, moeten ook de opvolgers in sprint 100
+            const successors = getSuccessors(issue);
+            if (successors.length > 0) {
+                successors.forEach(successorKey => {
+                    const successor = planningResult.plannedIssues.find(pi => pi.issue.key === successorKey);
+                    if (successor && successor.sprint !== '100') {
+                        successor.sprint = '100';
+                    }
+                });
+            }
+            return '100';
+        }
 
+        const availableCapacity = getAvailableCapacity(sprintName, assignee, planningResult);
         if (availableCapacity >= issueHours) {
             return sprintName;
         }
     }
 
+    // Als geen sprint met voldoende capaciteit is gevonden, gebruik sprint 100
     // Als een issue in sprint 100 wordt geplaatst, moeten ook de opvolgers in sprint 100
     const successors = getSuccessors(issue);
     if (successors.length > 0) {
@@ -343,7 +389,6 @@ export function findFirstAvailableSprint(issue: Issue, planningResult: PlanningR
             }
         });
     }
-
     return '100';
 }
 
@@ -351,9 +396,12 @@ export function findFirstAvailableSprint(issue: Issue, planningResult: PlanningR
 function getAvailableCapacity(sprintName: string, assignee: string, planningResult: PlanningResult): number {
     // Speciale behandeling voor Peter van Diermen en Unassigned
     if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
+        // Bereken de totale sprint capaciteit
         const totalSprintCapacity = planningResult.sprintCapacity
             .filter(c => c.sprint === sprintName)
             .reduce((sum, c) => sum + c.capacity, 0);
+
+        // Bereken alle geplande uren in deze sprint
         const plannedIssuesHours = planningResult.plannedIssues
             .filter(pi => pi.sprint === sprintName)
             .reduce((sum, pi) => sum + (pi.issue.fields?.timeestimate || 0) / 3600, 0);
@@ -791,61 +839,74 @@ function checkSprintCapacity(
     employeeCapacities: EmployeeCapacity[],
     sprintCapacities: SprintCapacity[]
 ): { canFit: boolean; reason: string } {
-    // Gebruik timeestimate (resterende uren) in plaats van timeoriginalestimate
-    const issueHours = issue.fields?.timeestimate ? issue.fields.timeestimate / 3600 : 0;
-    const assignee = issue.fields?.assignee?.displayName || 'Unassigned';
-    
-    // Haal de beschikbare capaciteit op uit de sprintCapacity array
-    const sprintCapacityEntry = sprintCapacities.find(
-        cap => cap.sprint === sprint && cap.employee === assignee
-    );
-    
-    if (!sprintCapacityEntry) {
-        return { 
-            canFit: false, 
-            reason: `Geen capaciteit gevonden voor medewerker ${assignee} in sprint ${sprint}` 
-        };
+    const assignee = getAssigneeName(issue.fields?.assignee);
+    const hours = issue.fields?.timeestimate ? issue.fields.timeestimate / 3600 : 0;
+
+    // Vind de sprint capaciteit voor deze sprint
+    const sprintCapacity = sprintCapacities.find(sc => sc.sprint === sprint);
+    if (!sprintCapacity) {
+        return { canFit: false, reason: `Geen sprint capaciteit gevonden voor sprint ${sprint}` };
     }
-    
-    logger.info(`Beschikbare capaciteit in sprint: ${sprintCapacityEntry.availableCapacity} uur`);
-    
-    // Voor Peter van Diermen of Unassigned: controleer alleen resterende sprint capaciteit
+
+    // Bereken de beschikbare capaciteit voor deze sprint
+    const availableCapacity = calculateSprintCapacity(
+        sprint,
+        sprintDates,
+        currentDate,
+        sprintCapacity.capacity
+    );
+
+    // Vind de employee capaciteit
+    const employeeCapacity = employeeCapacities.find(ec => ec.name === assignee);
+    if (!employeeCapacity) {
+        return { canFit: false, reason: `Geen capaciteit gevonden voor medewerker ${assignee}` };
+    }
+
+    // Controleer de capaciteit
     if (assignee === 'Peter van Diermen' || assignee === 'Unassigned') {
-        if (sprintCapacityEntry.availableCapacity >= issueHours) {
-            return { 
-                canFit: true, 
-                reason: `Voldoende resterende sprint capaciteit (${sprintCapacityEntry.availableCapacity} uur beschikbaar voor ${issueHours} uur)` 
-            };
-        } else {
+        // Voor Peter van Diermen en Unassigned: controleer alleen sprint capaciteit
+        // Bereken de totale sprint capaciteit
+        const totalSprintCapacity = sprintCapacities
+            .filter(sc => sc.sprint === sprint)
+            .reduce((sum, sc) => sum + sc.capacity, 0);
+
+        // Bereken alle geplande uren in deze sprint
+        const plannedIssuesHours = sprintCapacities
+            .filter(sc => sc.sprint === sprint)
+            .reduce((sum, sc) => {
+                // Bereken hoeveel uren er al gepland zijn voor deze medewerker in deze sprint
+                const plannedHours = sc.capacity - sc.availableCapacity;
+                return sum + plannedHours;
+            }, 0);
+
+        const availableSprintCapacity = totalSprintCapacity - plannedIssuesHours;
+
+        if (hours > availableSprintCapacity) {
             return { 
                 canFit: false, 
-                reason: `Onvoldoende resterende sprint capaciteit (${sprintCapacityEntry.availableCapacity} uur beschikbaar voor ${issueHours} uur)` 
+                reason: `Niet genoeg sprint capaciteit (${availableSprintCapacity} uur beschikbaar voor ${hours} uur)` 
+            };
+        }
+    } else {
+        // Voor andere medewerkers: controleer zowel individuele als sprint capaciteit
+        const individualCapacity = employeeCapacity.capacity;
+        
+        if (hours > individualCapacity) {
+            return { 
+                canFit: false, 
+                reason: `Niet genoeg individuele capaciteit voor ${assignee} (${individualCapacity} uur beschikbaar voor ${hours} uur)` 
+            };
+        }
+        
+        if (hours > availableCapacity) {
+            return { 
+                canFit: false, 
+                reason: `Niet genoeg sprint capaciteit (${availableCapacity} uur beschikbaar voor ${hours} uur)` 
             };
         }
     }
-    
-    // Voor overige medewerkers: controleer zowel medewerker als sprint capaciteit
-    const employeeCapacity = employeeCapacities.find(emp => emp.name === assignee);
-    if (!employeeCapacity) {
-        return { 
-            canFit: false, 
-            reason: `Geen capaciteit gevonden voor medewerker ${assignee}` 
-        };
-    }
-    
-    logger.info(`Beschikbare medewerker capaciteit: ${employeeCapacity.capacity} uur`);
-    
-    if (employeeCapacity.capacity >= issueHours && sprintCapacityEntry.availableCapacity >= issueHours) {
-        return { 
-            canFit: true, 
-            reason: `Voldoende medewerker en sprint capaciteit (${employeeCapacity.capacity} uur medewerker, ${sprintCapacityEntry.availableCapacity} uur sprint beschikbaar voor ${issueHours} uur)` 
-        };
-    } else {
-        return { 
-            canFit: false, 
-            reason: `Onvoldoende capaciteit (${employeeCapacity.capacity} uur medewerker, ${sprintCapacityEntry.availableCapacity} uur sprint beschikbaar voor ${issueHours} uur)` 
-        };
-    }
+
+    return { canFit: true, reason: 'Genoeg capaciteit beschikbaar' };
 }
 
 // Functie om een issue te plannen
@@ -940,24 +1001,25 @@ export async function calculatePlanning(
         throw new Error('Ongeldige project configuratie');
     }
 
-    logger.info(`\nBereken planning voor project ${projectConfig.project}`);
+    logger.info(`\n=== PLANNING BEREKENING VOOR PROJECT ${projectConfig.project} ===`);
 
     // Haal alle project configuraties op uit Google Sheets
     const projectSheetsData = await getGoogleSheetsData('Projects!A1:F');
     const allProjectConfigs = getProjectConfigsFromSheet(projectSheetsData);
-    logger.info(`Aantal project configuraties gevonden: ${allProjectConfigs.length}`);
+    logger.info(`Gevonden project configuraties: ${allProjectConfigs.map(pc => pc.project).join(', ')}`);
 
     // Voor het project "Klantprojecten", haal eerst alle AMP issues op die niet gepland hoeven te worden
     let issuesToPlan = [...issues];
 
     // Haal sprint capaciteiten op uit Google Sheets
     const sprintCapacities = await getSprintCapacityFromSheet(googleSheetsData);
-    logger.info(`Aantal gevonden sprint capaciteiten: ${sprintCapacities.length}`);
+    const uniqueSprints = [...new Set(sprintCapacities.map(sc => sc.sprint))];
+    logger.info(`Beschikbare sprints: ${uniqueSprints.join(', ')}`);
 
     // Bepaal de project start datum
     const projectStartDate = projectConfig.sprintStartDate || new Date('2025-05-26');
     projectStartDate.setHours(0, 0, 0, 0);
-    logger.info(`Project start datum: ${projectStartDate.toLocaleDateString('nl-NL')}`);
+    logger.info(`Project start datum: ${projectStartDate.toLocaleDateString('nl-NL')}\n`);
 
     // Bereken sprint datums
     const sprintDates: { [key: string]: { start: Date; end: Date } } = {};
@@ -980,22 +1042,57 @@ export async function calculatePlanning(
         }
     });
 
+    // Bereken de totale sprintcapaciteit per sprint als de som van de capaciteiten van alle medewerkers
+    const totalSprintCapacities: Record<string, number> = {};
+    sprintCapacities.forEach(capacity => {
+        if (!totalSprintCapacities[capacity.sprint]) {
+            totalSprintCapacities[capacity.sprint] = 0;
+        }
+        totalSprintCapacities[capacity.sprint] += capacity.capacity;
+    });
+
+    // Update de sprint capaciteiten met de totale capaciteit
+    sprintCapacities.forEach(capacity => {
+        capacity.totalSprintCapacity = totalSprintCapacities[capacity.sprint];
+    });
+
+    // Log de sprint capaciteiten per sprint per project
+    for (const sprint of uniqueSprints) {
+        
+        // Groepeer capaciteiten per project
+        const projectCapacities = new Map<string, { total: number; employees: { name: string; capacity: number }[] }>();
+        
+        sprintCapacities
+            .filter(sc => sc.sprint === sprint)
+            .forEach(sc => {
+                const project = sc.project || 'Geen project';
+                if (!projectCapacities.has(project)) {
+                    projectCapacities.set(project, { total: 0, employees: [] });
+                }
+                const projectData = projectCapacities.get(project)!;
+                projectData.total += sc.capacity;
+                projectData.employees.push({ name: sc.employee, capacity: sc.capacity });
+            });
+
+
+    }
+
     // Bereken huidige datum
     const currentDate = new Date();
     currentDate.setHours(0, 0, 0, 0);
-    logger.info(`Huidige datum: ${currentDate.toLocaleDateString('nl-NL')}`);
+    logger.info(`Huidige datum: ${currentDate.toLocaleDateString('nl-NL')}\n`);
 
     // Bereken aantal dagen tussen project start en huidige datum
     const daysBetween = Math.floor((currentDate.getTime() - projectStartDate.getTime()) / (1000 * 60 * 60 * 24));
-    logger.info(`Aantal dagen tussen project start en huidige datum: ${daysBetween}`);
+    logger.info(`Aantal dagen tussen project start en huidige datum: ${daysBetween}\n`);
 
     // Bepaal sprint index op basis van huidige datum
     const sprintIndex = Math.floor(daysBetween / 14) + 1;
-    logger.info(`Sprint index: ${sprintIndex}`);
+    logger.info(`Huidige sprint index: ${sprintIndex}\n`);
 
     // Sorteer issues op basis van relaties en due dates
     const sortedIssues = sortIssuesByRelationsAndDueDates(issuesToPlan);
-    logger.info(`Aantal issues om te plannen: ${sortedIssues.length}`);
+    logger.info(`Aantal issues om te plannen: ${sortedIssues.length}\n`);
 
     // Initialiseer planning resultaat
     const planningResult: PlanningResult = {
@@ -1008,8 +1105,10 @@ export async function calculatePlanning(
         employeeSprintUsedHours: {},
         currentSprint: sprintIndex.toString(),
         capacityFactor: 1,
-        projectConfigs: allProjectConfigs  // Gebruik alle project configuraties
+        projectConfigs: allProjectConfigs
     };
+
+    logger.info('=== START PLANNEN ISSUES ===\n');
 
     // Plan elk issue
     for (const issue of sortedIssues) {
@@ -1023,6 +1122,22 @@ export async function calculatePlanning(
         if (sprint) {
             const assignee = getAssigneeName(issue.fields?.assignee);
             const hours = issue.fields?.timeestimate ? issue.fields.timeestimate / 3600 : 0;
+
+            // Gebruik planIssue voor validatie en capaciteit
+            const result = planIssue(
+                issue,
+                sprint,
+                sprintDates,
+                currentDate,
+                sprintCapacities.map(sc => ({ name: sc.employee, capacity: sc.capacity })),
+                sprintCapacities,
+                planningResult,
+                projectConfig
+            );
+            if (!result.success) {
+                logger.warn(`Issue ${issue.key} kan niet gepland worden: ${result.reason}`);
+                continue;
+            }
 
             // Voeg toe aan plannedIssues
             planningResult.plannedIssues.push({
@@ -1064,6 +1179,8 @@ export async function calculatePlanning(
             logger.warn(`Kon geen sprint vinden voor issue ${issue.key}`);
         }
     }
+
+    logger.info('=== EINDE PLANNING BEREKENING ===\n');
 
     return planningResult;
 }

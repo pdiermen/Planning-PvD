@@ -1,7 +1,7 @@
 import type { Issue, PlanningResult, EfficiencyData, WorkLog, SprintCapacity, ProjectConfig } from '../types.js';
 import logger from '../logger.js';
 import { getAssigneeName } from './assignee.js';
-import { getGoogleSheetsData } from '../google-sheets';
+import { getGoogleSheetsData } from '../google-sheets.js';
 
 //export function generateEfficiencyTable(efficiencyData: EfficiencyData[]): string {
 //    let html = '<table class="table table-striped">';
@@ -27,22 +27,14 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
     const projectConfigs = new Map<string, ProjectConfig>();
 
     // Verzamel alle project configuraties
-    logger.info('\n=== PROJECT CONFIGURATIES ===');
-    logger.info('Beschikbare project configuraties:');
     if (planning.projectConfigs) {
         for (const config of planning.projectConfigs) {
             const projectName = config.project.toUpperCase();
             projectConfigs.set(projectName, config);
-            logger.info(`- Project: ${projectName}`);
-            logger.info(`  Jira keys: ${config.codes.join(', ')}`);
-            for (const key of config.codes) {
-                logger.info(`  Project key ${key} toegevoegd voor project ${projectName}`);
-            }
         }
     }
 
     // Vul de projectEmployees map met de medewerkers uit de Employees tab
-    logger.info('\n=== MEDEWERKER TOEWIJZING ===');
     
     // Haal alle medewerkers op uit de Employees tab
     const employees = await getGoogleSheetsData('Employees!A1:H');
@@ -111,39 +103,23 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
                 const employeeSet = projectEmployeeSets.get(matchingProject.toLowerCase());
                 if (employeeSet) {
                     employeeSet.add(employee);
-                    logger.info(`Medewerker ${employee} toegevoegd aan project ${matchingProject}`);
                 }
             }
         }
     }
 
     // Log de informatie per project
-    logger.info('\n=== PROJECT OVERZICHT ===');
     for (const [projectName, config] of projectConfigs) {
         const sprints = projectSprints.get(projectName.toLowerCase());
         const employees = projectEmployeeSets.get(projectName.toLowerCase());
         
-        if (sprints && employees) {
-            logger.info(`\nProject: ${projectName}`);
-            logger.info(`Jira keys: ${config.codes.join(', ')}`);
-            logger.info(`Beschikbare sprints: ${Array.from(sprints).sort((a, b) => parseInt(a) - parseInt(b)).join(', ')}`);
-            logger.info(`Toegewezen medewerkers: ${Array.from(employees).join(', ')}`);
-            logger.info(`Aantal medewerkers: ${employees.size}`);
-        }
-    }
+   }
 
     // Kopieer de verzamelde medewerkers naar de projectEmployees map
     projectEmployeeSets.forEach((employees, project) => {
         projectEmployees.set(project, new Set(employees));
     });
 
-    // Log de projectEmployees map
-    logger.info('\n=== PROJECT MEDEWERKERS OVERZICHT ===');
-    projectEmployees.forEach((employees, project) => {
-        logger.info(`Project ${project}:`);
-        logger.info(`- Medewerkers: ${Array.from(employees).join(', ')}`);
-        logger.info(`- Aantal medewerkers: ${employees.size}`);
-    });
 
     // Verzamel alle beschikbare sprints
     const availableSprints = new Set<string>();
@@ -169,7 +145,6 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
         })
         .sort((a, b) => parseInt(a) - parseInt(b));
 
-    logger.info(`Beschikbare sprints: ${JSON.stringify(availableSprintNames)}`);
 
     // Verzamel alle medewerkers die issues hebben
     const employeesWithIssues = new Set<string>();
@@ -183,7 +158,6 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
         employees.forEach(employee => allEmployees.add(employee));
     });
     employeesWithIssues.forEach(employee => allEmployees.add(employee));
-    logger.info(`Alle unieke medewerkers: ${Array.from(allEmployees).join(', ')}`);
 
     const employeeData: { [key: string]: { [key: string]: { available: number; planned: number; remaining: number } } } = {};
 
@@ -246,14 +220,9 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
         const sprintIssues = planning.plannedIssues.filter(pi => pi.sprint === sprint);
         const sprintProjectName = sprintIssues.length > 0 ? sprintIssues[0].project?.toLowerCase() || '' : '';
         
-        // Log de sprint en project informatie voor debugging
-        logger.info(`\n=== SPRINT ${sprint} ===`);
-        logger.info(`Project naam: ${sprintProjectName.toUpperCase()}`);
-        logger.info(`Aantal issues: ${sprintIssues.length}`);
         
         // Haal alle actieve medewerkers op voor dit project
         const activeEmployees = projectEmployees.get(sprintProjectName) || new Set<string>();
-        logger.info(`Actieve medewerkers voor project ${sprintProjectName.toUpperCase()}: ${Array.from(activeEmployees).join(', ')}`);
 
         // Voor elke medewerker in het project
         for (const employee of activeEmployees) {

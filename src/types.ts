@@ -175,6 +175,7 @@ export interface SprintCapacity {
     availableCapacity: number;
     project: string;
     startDate?: string;
+    totalSprintCapacity?: number;
 }
 
 export interface SprintDates {

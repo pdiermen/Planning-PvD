@@ -304,7 +304,6 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
         const effectiveHoursStr = row[effectiveHoursIndex];
         const projectsStr = row[projectIndex];
 
-
         // Controleer of we geldige data hebben
         if (!employeeName) {
             logger.warn(`Ongeldige data voor medewerker: ${employeeName || 'onbekend'}`);
@@ -326,21 +325,13 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
             let availableCapacity = capacity;
             let startDate: string | undefined;
 
-            // Als er projecten zijn, gebruik de eerste project configuratie voor de startdatum
-            if (projects.length > 0 && projects[0] !== '') {
-                const projectConfig = projectConfigs.find(c => c.project === projects[0]);
-                if (projectConfig?.sprintStartDate) {
-                    const sprintStartDate = projectConfig.sprintStartDate;
-                    const sprintDuration = 14; // 2 weken per sprint
-                    
-                    // Bereken de start- en einddatum van de huidige sprint
-                    const sprintStart = new Date(sprintStartDate);
-                    sprintStart.setDate(sprintStart.getDate() + ((sprintNumber - 1) * sprintDuration));
+            // Bepaal de sprint startdatum op basis van project configuratie
+            for (const config of projectConfigs) {
+                if (config.sprintStartDate) {
+                    const sprintStart = new Date(config.sprintStartDate);
+                    sprintStart.setDate(sprintStart.getDate() + ((sprintNumber - 1) * 14));
                     const sprintEnd = new Date(sprintStart);
-                    sprintEnd.setDate(sprintStart.getDate() + sprintDuration - 1);
-
-                    const currentDate = new Date();
-                    currentDate.setHours(0, 0, 0, 0);
+                    sprintEnd.setDate(sprintStart.getDate() + 13);
 
                     // Voor de huidige sprint: bereken capaciteit op basis van resterende werkdagen
                     if (currentDate >= sprintStart && currentDate <= sprintEnd) {
@@ -359,11 +350,10 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                 }
             }
 
-            // Voor Peter van Diermen en Unassigned: gebruik de resterende sprint capaciteit
+            // Voor Peter van Diermen en Unassigned: gebruik een vaste capaciteit van 0 uur per sprint
             if (employeeName === 'Peter van Diermen' || employeeName === 'Unassigned') {
-                capacity = totalSprintCapacities[sprintKey];
-                availableCapacity = totalSprintCapacities[sprintKey] - usedSprintCapacities[sprintKey];
-                usedSprintCapacities[sprintKey] += capacity; // Update de gebruikte capaciteit
+                capacity = 0;
+                availableCapacity = 0;
             }
 
             // Voeg één capaciteit toe per medewerker per sprint
