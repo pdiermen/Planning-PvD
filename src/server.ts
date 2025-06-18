@@ -476,6 +476,7 @@ interface SprintCapacity {
     capacity: number;
     project?: string; // Maak project optioneel
     availableCapacity?: number; // Standaard gelijk aan de volledige capaciteit
+    startDate?: string; // Voeg startDate toe voor sprint datums
 }
 
 interface Worklog {
@@ -1995,16 +1996,19 @@ app.get('/api/planning', async (req, res) => {
 
         // Combineer alle planning resultaten
         const combinedPlanning: PlanningResult = {
-            sprintCapacity: planningResults.flatMap(r => r.planning.sprintCapacity || []),
-            sprintHours: Object.assign({}, ...planningResults.map(r => r.planning.sprintHours || {})),
-            plannedIssues: planningResults.flatMap(r => r.planning.plannedIssues || []),
-            sprints: planningResults.flatMap(r => r.planning.sprints || []),
-            projectConfigs: projectConfigs,
-            issues: planningResults.flatMap(r => r.planning.issues || []),
-            sprintAssignments: Object.assign({}, ...planningResults.map(r => r.planning.sprintAssignments || {})),
-            employeeSprintUsedHours: Object.assign({}, ...planningResults.map(r => r.planning.employeeSprintUsedHours || {})),
-            currentSprint: planningResults[0]?.planning.currentSprint || '1',
-            capacityFactor: planningResults[0]?.planning.capacityFactor || 1
+            sprintCapacity: [],
+            sprintHours: {},
+            plannedIssues: [],
+            sprints: [],
+            projectConfigs: [],
+            sprintAssignments: {},
+            issues: [],
+            employeeSprintUsedHours: {},
+            currentSprint: '',
+            capacityFactor: 1,
+            sprintDates: {}, // toegevoegd
+            employeeCapacities: [], // toegevoegd
+            sprintPlanning: [] // toegevoegd
         };
 
         const sprintNames = new Map<string, string>();

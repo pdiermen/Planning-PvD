@@ -184,6 +184,26 @@ export interface SprintDates {
     endDate: string;
 }
 
+export interface EmployeeCapacity {
+    employee: string;
+    capacity: number;
+    project: string;
+}
+
+export interface SprintPlanning {
+    sprint: string;
+    startDate: string;
+    endDate: string;
+    employeePlanning: EmployeePlanning[];
+}
+
+export interface EmployeePlanning {
+    employee: string;
+    capacity: number;
+    availableCapacity: number;
+    project: string;
+}
+
 export interface PlanningResult {
     sprintHours: Record<string, Record<string, number>>;
     plannedIssues: PlannedIssue[];
@@ -195,4 +215,7 @@ export interface PlanningResult {
     currentSprint: string;
     capacityFactor: number;
     projectConfigs?: ProjectConfig[];
+    sprintDates: { [key: string]: { start: Date; end: Date } };
+    employeeCapacities: EmployeeCapacity[];
+    sprintPlanning: SprintPlanning[];
 } 

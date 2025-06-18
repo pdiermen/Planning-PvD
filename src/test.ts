@@ -1,4 +1,4 @@
-import { getActiveIssues, isEETIssue, formatTime } from './jira';
+import { getActiveIssues, isEETIssue, formatTime } from './jira.js';
 import Table from 'cli-table3';
 
 interface IssueLink {

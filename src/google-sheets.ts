@@ -233,22 +233,14 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
     const sprintCapacities: SprintCapacity[] = [];
     const headerRow = googleSheetsData[0];
     
-    // Controleer of de headerRow bestaat en een array is
     if (!headerRow || !Array.isArray(headerRow)) {
         logger.error('Ongeldige header rij in Google Sheets data');
         return [];
     }
 
-    // Log de header rij voor debugging
-    logger.info(`Header rij: ${JSON.stringify(headerRow)}`);
-
-    // Zoek de kolom indices
     const nameIndex = headerRow.findIndex(header => header?.toLowerCase() === 'naam');
     const effectiveHoursIndex = headerRow.findIndex(header => header?.toLowerCase() === 'effectieve uren');
     const projectIndex = headerRow.findIndex(header => header?.toLowerCase() === 'project');
-
-    // Log de gevonden indices voor debugging
-    logger.info(`Kolom indices - Naam: ${nameIndex}, Effectieve uren: ${effectiveHoursIndex}, Project: ${projectIndex}`);
 
     if (nameIndex === -1 || effectiveHoursIndex === -1 || projectIndex === -1) {
         logger.error('Verplichte kolommen niet gevonden in Google Sheets data');
@@ -260,67 +252,22 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
     const projectConfigs = getProjectConfigsFromSheet(projectSheetsData);
     const currentDate = new Date();
 
-    // Log de gevonden project configuraties
-    logger.info('Gevonden project configuraties:');
-    projectConfigs.forEach(config => {
-        logger.info(`- Project: ${config.project}, Sprint startdatum: ${config.sprintStartDate?.toISOString() || 'geen'}`);
-    });
-
-    // Bereken eerst de totale sprint capaciteit per sprint
-    const totalSprintCapacities: { [sprint: string]: number } = {};
-    const usedSprintCapacities: { [sprint: string]: number } = {};
-    
-    // Verwerk de data rijen voor totale sprint capaciteit
-    for (let i = 1; i < googleSheetsData.length; i++) {
-        const row = googleSheetsData[i];
-        if (!row || !Array.isArray(row)) continue;
-
-        const employeeName = row[nameIndex];
-        const effectiveHoursStr = row[effectiveHoursIndex];
-        let effectiveHours = parseFloat(effectiveHoursStr?.toString() || '0');
-
-        // Zet effectieve uren op 0 voor Peter van Diermen en Unassigned
-        if (employeeName === 'Peter van Diermen' || employeeName === 'Unassigned') {
-            effectiveHours = 0;
-        }
-
-        // Genereer capaciteiten voor 100 sprints
-        for (let sprintNumber = 1; sprintNumber <= 100; sprintNumber++) {
-            const sprintKey = sprintNumber.toString();
-            if (!totalSprintCapacities[sprintKey]) {
-                totalSprintCapacities[sprintKey] = 0;
-                usedSprintCapacities[sprintKey] = 0;
-            }
-            totalSprintCapacities[sprintKey] += effectiveHours * 2; // Standaard 2 weken per sprint
-        }
-    }
-
     // Verwerk de data rijen voor individuele capaciteiten
     for (let i = 1; i < googleSheetsData.length; i++) {
         const row = googleSheetsData[i];
         if (!row || !Array.isArray(row)) continue;
 
-        const employeeName = row[nameIndex];
+        const employeeName = row[nameIndex]?.toString() || 'Unassigned';
         const effectiveHoursStr = row[effectiveHoursIndex];
-        const projectsStr = row[projectIndex];
-
-        // Controleer of we geldige data hebben
-        if (!employeeName) {
-            logger.warn(`Ongeldige data voor medewerker: ${employeeName || 'onbekend'}`);
-            continue;
-        }
-
-        let effectiveHours = parseFloat(effectiveHoursStr?.toString() || '0');
+        const projectsStr = row[projectIndex] || '';
+        const effectiveHours = parseFloat(effectiveHoursStr?.toString() || '0');
         const projects = projectsStr ? projectsStr.toString().split(',').map(p => p.trim()) : [];
 
-        // Zet effectieve uren op 0 voor Peter van Diermen en Unassigned
-        if (employeeName === 'Peter van Diermen' || employeeName === 'Unassigned') {
-            effectiveHours = 0;
-        }
+        // Log de capaciteit per medewerker zoals uit de sheet gelezen
+        logger.info(`Medewerker: ${employeeName}, Effectieve uren: ${effectiveHours}, Projecten: ${projects.join(', ')}`);
 
-        // Genereer capaciteiten voor 100 sprints
+        // Maak capaciteiten aan voor alle sprints
         for (let sprintNumber = 1; sprintNumber <= 100; sprintNumber++) {
-            const sprintKey = sprintNumber.toString();
             let capacity = effectiveHours * 2; // Standaard 2 weken per sprint
             let availableCapacity = capacity;
             let startDate: string | undefined;
@@ -335,12 +282,9 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
 
                     // Voor de huidige sprint: bereken capaciteit op basis van resterende werkdagen
                     if (currentDate >= sprintStart && currentDate <= sprintEnd) {
-                        // Bereken het aantal resterende werkdagen (inclusief vandaag)
                         const remainingWorkDays = getWorkDaysBetween(currentDate, sprintEnd);
                         const totalWorkDaysInSprint = 10; // 2 weken = 10 werkdagen
                         const capacityFactor = remainingWorkDays / totalWorkDaysInSprint;
-                        
-                        // Pas de capaciteit aan op basis van de resterende werkdagen
                         const originalCapacity = effectiveHours * 2;
                         capacity = Math.round(originalCapacity * capacityFactor);
                         availableCapacity = capacity;
@@ -350,21 +294,28 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                 }
             }
 
-            // Voor Peter van Diermen en Unassigned: gebruik een vaste capaciteit van 0 uur per sprint
-            if (employeeName === 'Peter van Diermen' || employeeName === 'Unassigned') {
-                capacity = 0;
-                availableCapacity = 0;
+            // Voeg de capaciteit toe voor elk project
+            if (projects.length === 0 || projects[0] === '') {
+                sprintCapacities.push({
+                    employee: employeeName,
+                    sprint: sprintNumber.toString(),
+                    capacity: capacity,
+                    project: '',
+                    availableCapacity: availableCapacity,
+                    startDate: startDate
+                });
+            } else {
+                projects.forEach(project => {
+                    sprintCapacities.push({
+                        employee: employeeName,
+                        sprint: sprintNumber.toString(),
+                        capacity: capacity,
+                        project: project,
+                        availableCapacity: availableCapacity,
+                        startDate: startDate
+                    });
+                });
             }
-
-            // Voeg één capaciteit toe per medewerker per sprint
-            sprintCapacities.push({
-                employee: employeeName,
-                sprint: sprintKey,
-                capacity: capacity,
-                project: projects[0] || '', // Gebruik het eerste project als hoofdproject
-                availableCapacity: availableCapacity,
-                startDate: startDate
-            });
         }
     }
 
