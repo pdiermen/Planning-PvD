@@ -274,7 +274,7 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
 
             // Bepaal de sprint startdatum op basis van project configuratie
             for (const config of projectConfigs) {
-                if (config.sprintStartDate) {
+                if (config.sprintStartDate && config.project === projects[0]) {
                     const sprintStart = new Date(config.sprintStartDate);
                     sprintStart.setDate(sprintStart.getDate() + ((sprintNumber - 1) * 14));
                     const sprintEnd = new Date(sprintStart);
@@ -291,6 +291,7 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                     }
 
                     startDate = sprintStart.toISOString();
+                    break; // Stop na het vinden van de juiste project configuratie
                 }
             }
 
