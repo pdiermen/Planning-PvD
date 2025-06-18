@@ -237,12 +237,10 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
                 pi.project?.toLowerCase() === sprintProjectName // Gebruik projectnaam uit planning en vergelijk case-insensitive
             );
             
-            // Update totalen alleen als het geen Peter van Diermen of Unassigned is
-            if (employee !== 'Peter van Diermen' && employee !== 'Unassigned') {
-                sprintTotalAvailable += data.available;
-                sprintTotalPlanned += data.planned;
-                sprintTotalRemaining += data.remaining;
-            }
+            // Update totalen voor alle medewerkers
+            sprintTotalAvailable += data.available;
+            sprintTotalPlanned += data.planned;
+            sprintTotalRemaining += data.remaining;
             sprintTotalIssues += plannedIssues.length;
 
             // Format de geplande issues met rode tekst voor issues die te laat zijn ingepland
