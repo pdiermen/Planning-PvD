@@ -218,4 +218,19 @@ export interface PlanningResult {
     sprintDates: { [key: string]: { start: Date; end: Date } };
     employeeCapacities: EmployeeCapacity[];
     sprintPlanning: SprintPlanning[];
-} 
+    projectSprintMap?: ProjectSprintMap;
+}
+
+export interface SprintInfo {
+  start: Date;
+  end: Date;
+  employeeCapacities: { [employee: string]: number };
+  totalCapacity: number;
+  isCurrent: boolean;
+}
+
+export type ProjectSprintMap = {
+  [project: string]: {
+    [sprintNum: string]: SprintInfo;
+  };
+}; 

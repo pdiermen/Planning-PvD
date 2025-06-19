@@ -363,7 +363,7 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
 }
 
 // Helper functie om werkdagen tussen twee datums te berekenen
-function getWorkDaysBetween(startDate: Date, endDate: Date): number {
+export function getWorkDaysBetween(startDate: Date, endDate: Date): number {
     let workDays = 0;
     const currentDate = new Date(startDate);
     
@@ -436,8 +436,8 @@ export async function writePlanningAndIssuesToSheet(projectName: string, plannin
         // Groepeer de capaciteiten per sprint
         const sprintCapacities = new Map<string, SprintCapacity[]>();
         planning.sprintCapacity.forEach(capacity => {
-            // Alleen capaciteiten toevoegen voor sprints waar issues op gepland zijn
-            if (plannedSprints.has(capacity.sprint)) {
+            // Alleen capaciteiten toevoegen voor sprints waar issues op gepland zijn EN voor het specifieke project
+            if (plannedSprints.has(capacity.sprint) && capacity.project === projectName) {
                 if (!sprintCapacities.has(capacity.sprint)) {
                     sprintCapacities.set(capacity.sprint, []);
                 }

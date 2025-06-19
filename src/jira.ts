@@ -246,36 +246,24 @@ export async function getSprintCapacity(): Promise<SprintCapacity[]> {
         // Haal de capaciteit op uit Google Sheets
         const sheetCapacities = await getSprintCapacityFromSheet(null);
         
-        // Standaard capaciteit per medewerker als fallback
-        const defaultCapacities: { [key: string]: number } = {
-            'Peter van Diermen': 40,
-            'Adit Shah': 60,
-            'Bart Hermans': 16,
-            'Florian de Jong': 8,
-            'Milan van Dijk': 40,
-            'virendra kumar': 60
-        };
-
-        // Maak een lijst van capaciteiten met standaard waarden
+        // Maak een lijst van capaciteiten alleen voor medewerkers die in de sheet staan
         const capacities: SprintCapacity[] = [];
         const maxSprints = 100;
 
-        // Voeg alle medewerkers toe met hun standaard capaciteit
-        Object.entries(defaultCapacities).forEach(([employee, capacity]) => {
+        // Voeg alleen medewerkers toe die daadwerkelijk in de Google Sheets staan
+        for (const sheetCapacity of sheetCapacities) {
             for (let i = 1; i <= maxSprints; i++) {
-                // Check of er een capaciteit uit de sheet is voor deze medewerker en sprint
-                const sheetCapacity = sheetCapacities.find(c => c.employee === employee && c.sprint === i.toString());
                 capacities.push({
-                    employee,
+                    employee: sheetCapacity.employee,
                     sprint: i.toString(),
-                    capacity: sheetCapacity?.capacity || capacity,
-                    project: 'ATLANTIS', // Standaard project voor alle capaciteiten
-                    availableCapacity: sheetCapacity?.capacity || capacity
+                    capacity: sheetCapacity.capacity,
+                    project: sheetCapacity.project || 'ATLANTIS',
+                    availableCapacity: sheetCapacity.availableCapacity
                 });
             }
-        });
+        }
 
-        logger.info(`${capacities.length} sprint capaciteiten gegenereerd`);
+        logger.info(`${capacities.length} sprint capaciteiten gegenereerd voor medewerkers uit Google Sheets`);
         return capacities;
     } catch (error: any) {
         logger.error(`Error bij ophalen van sprint capaciteit: ${error.message}`);
