@@ -280,14 +280,20 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                     const sprintEnd = new Date(sprintStart);
                     sprintEnd.setDate(sprintStart.getDate() + 13);
 
-                    // Voor de huidige sprint: bereken capaciteit op basis van resterende werkdagen
+                    // Voor sprints die al zijn begonnen maar nog niet zijn afgelopen: bereken beschikbare capaciteit op basis van resterende werkdagen
                     if (currentDate >= sprintStart && currentDate <= sprintEnd) {
                         const remainingWorkDays = getWorkDaysBetween(currentDate, sprintEnd);
                         const totalWorkDaysInSprint = 10; // 2 weken = 10 werkdagen
                         const capacityFactor = remainingWorkDays / totalWorkDaysInSprint;
                         const originalCapacity = effectiveHours * 2;
-                        capacity = Math.round(originalCapacity * capacityFactor);
-                        availableCapacity = capacity;
+                        // Behoud de volledige capaciteit, maar reduceer alleen de beschikbare capaciteit
+                        capacity = originalCapacity;
+                        availableCapacity = Math.round(originalCapacity * capacityFactor);
+                    } else if (currentDate > sprintEnd) {
+                        // Voor sprints die al zijn afgelopen: geen beschikbare capaciteit
+                        const originalCapacity = effectiveHours * 2;
+                        capacity = originalCapacity;
+                        availableCapacity = 0;
                     }
 
                     startDate = sprintStart.toISOString();
@@ -307,13 +313,45 @@ export async function getSprintCapacityFromSheet(googleSheetsData: (string | nul
                 });
             } else {
                 projects.forEach(project => {
+                    // Bereken capaciteitsfactor per project op basis van de sprint datums van dat project
+                    let projectCapacity = effectiveHours * 2;
+                    let projectAvailableCapacity = projectCapacity;
+                    let projectStartDate: string | undefined;
+
+                    // Zoek de project configuratie voor dit specifieke project
+                    const projectConfig = projectConfigs.find(config => config.project === project);
+                    if (projectConfig && projectConfig.sprintStartDate) {
+                        const sprintStart = new Date(projectConfig.sprintStartDate);
+                        sprintStart.setDate(sprintStart.getDate() + ((sprintNumber - 1) * 14));
+                        const sprintEnd = new Date(sprintStart);
+                        sprintEnd.setDate(sprintStart.getDate() + 13);
+
+                        // Voor sprints die al zijn begonnen maar nog niet zijn afgelopen: bereken beschikbare capaciteit op basis van resterende werkdagen
+                        if (currentDate >= sprintStart && currentDate <= sprintEnd) {
+                            const remainingWorkDays = getWorkDaysBetween(currentDate, sprintEnd);
+                            const totalWorkDaysInSprint = 10; // 2 weken = 10 werkdagen
+                            const capacityFactor = remainingWorkDays / totalWorkDaysInSprint;
+                            const originalCapacity = effectiveHours * 2;
+                            // Behoud de volledige capaciteit, maar reduceer alleen de beschikbare capaciteit
+                            projectCapacity = originalCapacity;
+                            projectAvailableCapacity = Math.round(originalCapacity * capacityFactor);
+                        } else if (currentDate > sprintEnd) {
+                            // Voor sprints die al zijn afgelopen: geen beschikbare capaciteit
+                            const originalCapacity = effectiveHours * 2;
+                            projectCapacity = originalCapacity;
+                            projectAvailableCapacity = 0;
+                        }
+
+                        projectStartDate = sprintStart.toISOString();
+                    }
+
                     sprintCapacities.push({
                         employee: employeeName,
                         sprint: sprintNumber.toString(),
-                        capacity: capacity,
+                        capacity: projectCapacity,
                         project: project,
-                        availableCapacity: availableCapacity,
-                        startDate: startDate
+                        availableCapacity: projectAvailableCapacity,
+                        startDate: projectStartDate
                     });
                 });
             }
@@ -384,7 +422,7 @@ export async function writePlanningAndIssuesToSheet(projectName: string, plannin
         // Bereid de planning data voor
         const planningData = [
             ['Planning Overzicht'],
-            ['Sprint', 'Medewerker', 'Capaciteit', 'Gebruikt', 'Beschikbaar']
+            ['Sprint', 'Project', 'Medewerker', 'Capaciteit', 'Gebruikt', 'Beschikbaar']
         ];
 
         // Verzamel alle sprints waar issues op gepland zijn
@@ -423,6 +461,7 @@ export async function writePlanningAndIssuesToSheet(projectName: string, plannin
 
                 planningData.push([
                     sprint,
+                    capacity.project,
                     capacity.employee,
                     effectiveHours.toString(),
                     usedHours.toString(),
@@ -447,14 +486,16 @@ export async function writePlanningAndIssuesToSheet(projectName: string, plannin
         // Bereid de issues data voor
         const issuesData = [
             ['Issues Overzicht'],
-            ['Issue', 'Titel', 'Sprint', 'Medewerker', 'Geschatte uren', 'Status']
+            ['Issue', 'Project', 'Titel', 'Sprint', 'Medewerker', 'Geschatte uren', 'Status']
         ];
 
         // Voeg de issues data toe
         issues.forEach(issue => {
             const plannedIssue = planning.plannedIssues.find(pi => pi.issue.key === issue.key);
+            const projectKey = issue.key.split('-')[0]; // Haal project key uit issue key
             issuesData.push([
                 issue.key,
+                projectKey,
                 issue.fields?.summary || '',
                 plannedIssue?.sprint || '',
                 issue.fields?.assignee?.displayName || 'Unassigned',

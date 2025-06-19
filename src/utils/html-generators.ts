@@ -159,7 +159,7 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
     });
     employeesWithIssues.forEach(employee => allEmployees.add(employee));
 
-    const employeeData: { [key: string]: { [key: string]: { available: number; planned: number; remaining: number } } } = {};
+    const employeeData: { [key: string]: { [key: string]: { available: number; planned: number; remaining: number; projectCapacity?: string } } } = {};
 
     // Initialiseer employeeData voor alle unieke medewerkers
     for (const employee of allEmployees) {
@@ -179,10 +179,18 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
         for (const capacity of planning.sprintCapacity) {
             if (capacity.project && capacity.project !== '') {
                 // Peter van Diermen en Unassigned moeten altijd 0 uur capaciteit hebben
-                const available = (capacity.employee === 'Peter van Diermen' || capacity.employee === 'Unassigned') ? 0 : capacity.capacity;
+                // Gebruik availableCapacity in plaats van capacity voor de beschikbare capaciteit
+                const available = (capacity.employee === 'Peter van Diermen' || capacity.employee === 'Unassigned') ? 0 : capacity.availableCapacity;
                 if (employeeData[capacity.employee] && employeeData[capacity.employee][capacity.sprint]) {
-                    employeeData[capacity.employee][capacity.sprint].available = available;
-                    employeeData[capacity.employee][capacity.sprint].remaining = available;
+                    // Bewaar de capaciteit per project in plaats van te overschrijven
+                    // De capaciteit wordt later per project gefilterd in de tabel generatie
+                    // Alleen overschrijven als er nog geen capaciteit is ingesteld voor dit project
+                    const currentData = employeeData[capacity.employee][capacity.sprint];
+                    if (currentData.available === 0 || !currentData.projectCapacity) {
+                        currentData.available = available;
+                        currentData.remaining = available;
+                        currentData.projectCapacity = capacity.project;
+                    }
                 }
             }
         }
@@ -226,11 +234,26 @@ export async function generateSprintHoursTable(planning: PlanningResult): Promis
 
         // Voor elke medewerker in het project
         for (const employee of activeEmployees) {
+            // Bepaal de capaciteit voor deze medewerker in deze sprint voor dit specifieke project
+            const projectCapacity = planning.sprintCapacity?.find(sc => 
+                sc.sprint === sprint && 
+                sc.employee === employee && 
+                sc.project?.toLowerCase() === sprintProjectName
+            );
+            
             const data = employeeData[employee]?.[sprint] || {
                 available: 0,
                 planned: 0,
                 remaining: 0
             };
+            
+            // Gebruik de capaciteit van het specifieke project
+            if (projectCapacity) {
+                const available = (employee === 'Peter van Diermen' || employee === 'Unassigned') ? 0 : projectCapacity.availableCapacity;
+                data.available = available;
+                data.remaining = available - data.planned;
+            }
+            
             const plannedIssues = planning.plannedIssues.filter(pi => 
                 pi.sprint === sprint && 
                 getAssigneeName(pi.issue.fields?.assignee) === employee &&
