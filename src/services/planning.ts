@@ -148,8 +148,8 @@ const validatePlanningOrder = async (planning: PlanningResult): Promise<boolean>
 
     // Bepaal de huidige sprint
     const currentDate = new Date();
-    const currentSprintIndex = findSprintIndexForDate(currentDate, planning.sprintCapacity);
-    const currentSprintName = currentSprintIndex !== -1 ? planning.sprintCapacity[currentSprintIndex].sprint : null;
+    const currentSprintIndex = findSprintIndexForDate(currentDate, planning.sprintDates);
+    const currentSprintName = currentSprintIndex !== -1 ? planning.sprints[currentSprintIndex].sprint : null;
 
     // Valideer alle issues
     for (const plannedIssue of planning.plannedIssues) {
@@ -167,8 +167,8 @@ const validatePlanningOrder = async (planning: PlanningResult): Promise<boolean>
 
                 // Bepaal de huidige sprint
                 const currentDate = new Date();
-                const currentSprintIndex = findSprintIndexForDate(currentDate, planning.sprintCapacity);
-                const currentSprintName = currentSprintIndex !== -1 ? planning.sprintCapacity[currentSprintIndex].sprint : null;
+                const currentSprintIndex = findSprintIndexForDate(currentDate, planning.sprintDates);
+                const currentSprintName = currentSprintIndex !== -1 ? planning.sprints[currentSprintIndex].sprint : null;
 
                 // Als de due date voor de sprint start, moet het issue in een eerdere sprint
                 // MAAR alleen als het niet de huidige sprint is
@@ -275,14 +275,63 @@ function isSuccessor(issue: Issue): boolean {
 }
 
 // Helper functie om de sprint index te vinden voor een gegeven datum
-function findSprintIndexForDate(date: Date, sprints: SprintCapacity[]): number {
-    return sprints.findIndex(s => {
-        if (!s.startDate) return false;
-        const sprintStartDate = new Date(s.startDate);
-        const sprintEndDate = new Date(sprintStartDate);
-        sprintEndDate.setDate(sprintStartDate.getDate() + 14); // Sprint duurt 2 weken (14 dagen, inclusief begin- en einddatum)
-        return date >= sprintStartDate && date <= sprintEndDate;
-    });
+function findSprintIndexForDate(date: Date, sprintDates: { [key: string]: { start: Date; end: Date } }): number {
+    // Debug logging voor ATL7Q2-304
+    const isDebugIssue = date.toISOString().includes('2026-01-04');
+    if (isDebugIssue) {
+        logger.info(`\n=== DEBUG findSprintIndexForDate ===`);
+        logger.info(`Zoeken naar datum: ${date.toISOString()}`);
+        logger.info(`Aantal sprints in mapping: ${Object.keys(sprintDates).length}`);
+        logger.info(`Eerste 5 sprints: ${Object.keys(sprintDates).slice(0, 5).join(', ')}`);
+    }
+    
+    // Normaliseer de input datum naar alleen datum (geen tijd)
+    const normalizedDate = new Date(date);
+    normalizedDate.setHours(0, 0, 0, 0);
+    
+    // Sorteer de sprintnummers numeriek
+    const sprintNumbers = Object.keys(sprintDates).sort((a, b) => parseInt(a) - parseInt(b));
+    
+    // Eerst zoeken naar exacte match (datum valt binnen sprint)
+    for (const sprintNum of sprintNumbers) {
+        const dates = sprintDates[sprintNum];
+        
+        // Normaliseer sprint datums naar alleen datum (geen tijd)
+        const normalizedStart = new Date(dates.start);
+        normalizedStart.setHours(0, 0, 0, 0);
+        const normalizedEnd = new Date(dates.end);
+        normalizedEnd.setHours(0, 0, 0, 0);
+        
+        if (isDebugIssue) {
+            logger.info(`Sprint ${sprintNum}: ${normalizedStart.toISOString()} - ${normalizedEnd.toISOString()}`);
+        }
+        
+        if (normalizedDate >= normalizedStart && normalizedDate <= normalizedEnd) {
+            if (isDebugIssue) {
+                logger.info(`Exacte match gevonden: sprint ${sprintNum}`);
+            }
+            return parseInt(sprintNum) - 1; // index = sprintNum - 1
+        }
+    }
+    
+    // Als geen exacte match, zoek naar de eerste sprint die na de due date begint
+    for (const sprintNum of sprintNumbers) {
+        const dates = sprintDates[sprintNum];
+        const normalizedStart = new Date(dates.start);
+        normalizedStart.setHours(0, 0, 0, 0);
+        
+        if (normalizedDate <= normalizedStart) {
+            if (isDebugIssue) {
+                logger.info(`Sprint na due date gevonden: sprint ${sprintNum}`);
+            }
+            return parseInt(sprintNum) - 1; // index = sprintNum - 1
+        }
+    }
+    
+    if (isDebugIssue) {
+        logger.info(`Geen sprint gevonden voor due date`);
+    }
+    return -1;
 }
 
 // Helper functie om de eerste sprint na een datum te vinden
@@ -311,9 +360,9 @@ export async function findFirstAvailableSprint(
     const issueHours = issue.fields?.timeestimate ? issue.fields.timeestimate / 3600 : 0;
     const project = issue.fields?.project?.key || '';
 
-    // Extra logging voor EET-6464
-    if (issueKey === 'EET-6464') {
-        logger.info(`\n=== START PLANNEN EET-6464 ===`);
+    // Extra logging voor ATL7Q2-304
+    if (issueKey === 'ATL7Q2-304') {
+        logger.info(`\n=== DEBUG PLANNING ATL7Q2-304 ===`);
         logger.info(`Assignee: ${assignee}`);
         logger.info(`Due date: ${dueDate}`);
         logger.info(`Issue uren: ${issueHours}`);
@@ -328,38 +377,38 @@ export async function findFirstAvailableSprint(
     let startFromIndex = 0;
     if (dueDate) {
         const dueDateObj = new Date(dueDate);
-        const dueDateSprintIndex = findSprintIndexForDate(dueDateObj, planningResult.sprintCapacity);
+        const dueDateSprintIndex = findSprintIndexForDate(dueDateObj, planningResult.sprintDates);
+        if (issueKey === 'ATL7Q2-304') {
+            logger.info(`Due date object: ${dueDateObj.toISOString()}`);
+            logger.info(`Due date sprint index: ${dueDateSprintIndex}`);
+        }
         if (dueDateSprintIndex !== -1) {
             startFromIndex = dueDateSprintIndex;
         }
     } else {
-        const currentSprintIndex = findSprintIndexForDate(currentDate, planningResult.sprintCapacity);
+        const currentSprintIndex = findSprintIndexForDate(currentDate, planningResult.sprintDates);
         if (currentSprintIndex !== -1) {
             startFromIndex = currentSprintIndex;
         }
     }
 
-    if (issueKey === 'EET-6464') {
-        logger.info(`Start index: ${startFromIndex}`);
+    if (issueKey === 'ATL7Q2-304') {
+        logger.info(`Start index voor zoeken: ${startFromIndex}`);
     }
 
     // Zoek de eerste sprint met voldoende capaciteit vanaf de berekende start sprint
     for (let i = startFromIndex; i < sprintNames.length; i++) {
         const sprintName = sprintNames[i];
-        
-        // Extra logging voor EET-6464
-        if (issueKey === 'EET-6464') {
-            logger.info(`\nProberen sprint ${sprintName} (index ${i})`);
+        if (issueKey === 'ATL7Q2-304') {
+            logger.info(`Probeer sprint ${sprintName} (index ${i})`);
         }
-        
         // Sprint 100 is alleen beschikbaar als laatste optie
         if (sprintName === '100') {
-            if (issueKey === 'EET-6464') {
+            if (issueKey === 'ATL7Q2-304') {
                 logger.info(`Sprint 100 wordt overgeslagen`);
             }
             continue;
         }
-
         // Controleer of er voorgangers zijn die in deze of latere sprint zijn gepland
         const predecessors = getPredecessors(issue);
         const hasPredecessorsInLaterSprints = predecessors.some(predKey => {
@@ -368,14 +417,12 @@ export async function findFirstAvailableSprint(
             const predSprintIndex = sprintNames.indexOf(predIssue.sprint);
             return predSprintIndex >= i;
         });
-
         if (hasPredecessorsInLaterSprints) {
-            if (issueKey === 'EET-6464') {
+            if (issueKey === 'ATL7Q2-304') {
                 logger.info(`Voorgangers gevonden in deze of latere sprint, volgende sprint proberen`);
             }
             continue;
         }
-
         // Controleer capaciteit
         const { canFit, reason } = checkSprintCapacity(
             issue,
@@ -387,20 +434,18 @@ export async function findFirstAvailableSprint(
             planningResult.projectConfigs || [],
             planningResult.plannedIssues || []
         );
-
         if (canFit) {
-            if (issueKey === 'EET-6464') {
+            if (issueKey === 'ATL7Q2-304') {
                 logger.info(`Issue kan worden gepland in sprint ${sprintName}`);
             }
             return sprintName;
-        } else if (issueKey === 'EET-6464') {
+        } else if (issueKey === 'ATL7Q2-304') {
             logger.info(`Onvoldoende capaciteit in sprint ${sprintName}: ${reason}`);
             logger.info(`Proberen volgende sprint...`);
         }
     }
-
     // Als er geen geschikte sprint is gevonden, gebruik sprint 100
-    if (issueKey === 'EET-6464') {
+    if (issueKey === 'ATL7Q2-304') {
         logger.info(`Geen geschikte sprint gevonden, gebruik sprint 100`);
     }
     return '100';
@@ -872,88 +917,6 @@ function calculateSprintCapacity(
     return Math.max(0, totalCapacity - usedCapacity);
 }
 
-// Functie om een nieuwe sprint aan te maken als deze nog niet bestaat
-async function ensureSprintExists(
-    sprintNumber: string,
-    sprintCapacities: SprintCapacity[],
-    projectConfigs: ProjectConfig[],
-    currentDate: Date
-): Promise<void> {
-    // Controleer of de sprint al bestaat
-    const sprintExists = sprintCapacities.some(sc => sc.sprint === sprintNumber);
-    if (sprintExists) return;
-
-    // Bepaal de sprint datums en project
-    let sprintStartDate: Date | undefined;
-    let sprintEndDate: Date | undefined;
-    let projectName = '';
-
-    // Bepaal de sprint startdatum op basis van project configuratie
-    for (const config of projectConfigs) {
-        if (config.sprintStartDate) {
-            sprintStartDate = new Date(config.sprintStartDate);
-            sprintStartDate.setDate(sprintStartDate.getDate() + ((parseInt(sprintNumber) - 1) * 14));
-            sprintEndDate = new Date(sprintStartDate);
-            sprintEndDate.setDate(sprintStartDate.getDate() + 13);
-            projectName = config.project;
-            break;
-        }
-    }
-
-    if (!sprintStartDate || !sprintEndDate) {
-        logger.error(`Kon geen start- en einddatum bepalen voor sprint ${sprintNumber}`);
-        return;
-    }
-
-    // Log sprint informatie
-    logger.info('\n=== NIEUWE SPRINT AANGEMAAKT ===');
-    logger.info(`Project: ${projectName}`);
-    logger.info(`Sprint: ${sprintNumber}`);
-    logger.info(`Startdatum: ${sprintStartDate.toLocaleDateString('nl-NL')}`);
-    logger.info(`Einddatum: ${sprintEndDate.toLocaleDateString('nl-NL')}`);
-    logger.info('\nMedewerkers:');
-
-    // Maak nieuwe capaciteiten aan voor deze sprint
-    let totalSprintCapacity = 0;
-
-    // Gebruik de capaciteiten die al uit de Google Sheets zijn gehaald
-    const employeeCapacities = sprintCapacities.filter(sc => sc.project === projectName);
-    if (employeeCapacities.length === 0) {
-        logger.error(`Geen capaciteiten gevonden voor project ${projectName}`);
-        return;
-    }
-
-    // Voeg capaciteiten toe voor elke medewerker
-    employeeCapacities.forEach(employeeCapacity => {
-        let capacity = employeeCapacity.capacity;
-
-        // Voor de huidige sprint: bereken capaciteit op basis van resterende werkdagen
-        if (currentDate >= sprintStartDate && currentDate <= sprintEndDate) {
-            const remainingWorkDays = getWorkDaysBetween(currentDate, sprintEndDate);
-            const totalWorkDaysInSprint = getWorkDaysBetween(sprintStartDate, sprintEndDate);
-            const capacityFactor = remainingWorkDays / totalWorkDaysInSprint;
-            capacity = Math.round(capacity * capacityFactor);
-        }
-
-        // Log medewerker informatie
-        logger.info(`- ${employeeCapacity.employee}: ${capacity} uur`);
-        totalSprintCapacity += capacity;
-
-        // Voeg de nieuwe sprint capaciteit toe
-        sprintCapacities.push({
-            employee: employeeCapacity.employee,
-            sprint: sprintNumber,
-            capacity,
-            project: employeeCapacity.project,
-            availableCapacity: capacity,
-            startDate: sprintStartDate.toISOString()
-        });
-    });
-
-    logger.info(`\nTotale sprintcapaciteit: ${totalSprintCapacity} uur`);
-    logger.info('================================\n');
-}
-
 // Pas de checkSprintCapacity functie aan om zowel individuele als totale sprint capaciteit te controleren voor andere medewerkers.
 function checkSprintCapacity(
     issue: Issue,
@@ -1172,13 +1135,24 @@ export async function calculatePlanning(
 
     // Haal sprint capaciteiten op uit Google Sheets
     const sprintCapacities = await getSprintCapacityFromSheet(googleSheetsData);
-    const uniqueSprints = [...new Set(sprintCapacities.map(sc => sc.sprint))];
+    const uniqueSprints = [...new Set(sprintCapacities.map(sc => sc.sprint))].sort((a, b) => parseInt(a) - parseInt(b));
     logger.info(`Beschikbare sprints: ${uniqueSprints.join(', ')}`);
 
     // Bepaal de project start datum
     const projectStartDate = projectConfig.sprintStartDate || new Date('2025-05-26');
     projectStartDate.setHours(0, 0, 0, 0);
     logger.info(`Project start datum: ${projectStartDate.toLocaleDateString('nl-NL')}\n`);
+    logger.info(`Project configuratie gebruikt: ${JSON.stringify(projectConfig, null, 2)}\n`);
+
+    // Log sprintcapaciteiten startdatums voor debugging
+    logger.info(`\n=== SPRINTCAPACITEITEN STARTDATUMS ===`);
+    uniqueSprints.forEach(sprintNum => {
+        const sprintCapacity = sprintCapacities.find(sc => sc.sprint === sprintNum);
+        if (sprintCapacity?.startDate) {
+            const startDate = new Date(sprintCapacity.startDate);
+            logger.info(`Sprint ${sprintNum}: ${startDate.toLocaleDateString('nl-NL')} (${sprintCapacity.startDate})`);
+        }
+    });
 
     // Bereken sprint datums
     const sprintDates: { [key: string]: { start: Date; end: Date } } = {};
@@ -1198,6 +1172,16 @@ export async function calculatePlanning(
         const sprintNumber = parseInt(capacity.sprint);
         if (sprintDates[sprintNumber]) {
             capacity.startDate = sprintDates[sprintNumber].start.toISOString();
+        }
+    });
+
+    // Log de bijgewerkte sprintcapaciteiten startdatums
+    logger.info(`\n=== BIJGEWERKTE SPRINTCAPACITEITEN STARTDATUMS ===`);
+    uniqueSprints.forEach(sprintNum => {
+        const sprintCapacity = sprintCapacities.find(sc => sc.sprint === sprintNum);
+        if (sprintCapacity?.startDate) {
+            const startDate = new Date(sprintCapacity.startDate);
+            logger.info(`Sprint ${sprintNum}: ${startDate.toLocaleDateString('nl-NL')} (${sprintCapacity.startDate})`);
         }
     });
 
@@ -1313,7 +1297,8 @@ export async function calculatePlanning(
     const finalPlanningResult = await planning(
         sprintCapacities,
         allProjectConfigs,
-        currentDate
+        currentDate,
+        sprintDates
     );
 
     // Combineer de resultaten
@@ -1326,7 +1311,8 @@ export async function calculatePlanning(
 export async function planning(
     sprintCapacity: SprintCapacity[],
     projectConfigs: ProjectConfig[],
-    currentDate: Date
+    currentDate: Date,
+    existingSprintDates?: { [key: string]: { start: Date; end: Date } }
 ): Promise<PlanningResult> {
     // Maak een kopie van de sprint capaciteiten
     const planningResult: PlanningResult = {
@@ -1340,7 +1326,7 @@ export async function planning(
         currentSprint: '1',
         capacityFactor: 1,
         projectConfigs: projectConfigs,
-        sprintDates: {},
+        sprintDates: existingSprintDates || {},
         employeeCapacities: [],
         sprintPlanning: []
     };
@@ -1348,39 +1334,9 @@ export async function planning(
     // Bepaal de sprint nummers
     const sprintNumbers = [...new Set(sprintCapacity.map(sc => sc.sprint))].sort((a, b) => parseInt(a) - parseInt(b));
 
-    // Zorg ervoor dat alle benodigde sprints bestaan
-    for (const sprintNumber of sprintNumbers) {
-        if (!sprintCapacity.some(sc => sc.sprint === sprintNumber)) {
-            logger.info(`Sprint ${sprintNumber} bestaat niet, deze wordt aangemaakt`);
-            await ensureSprintExists(
-                sprintNumber,
-                planningResult.sprintCapacity,
-                projectConfigs,
-                currentDate
-            );
-        }
-    }
-
-    // Bepaal de sprint datums
-    const sprintDates = new Map<string, { start: Date; end: Date }>();
-    for (const config of projectConfigs) {
-        if (config.sprintStartDate) {
-            const startDate = new Date(config.sprintStartDate);
-            for (const sprintNumber of sprintNumbers) {
-                const sprintStart = new Date(startDate);
-                sprintStart.setDate(sprintStart.getDate() + ((parseInt(sprintNumber) - 1) * 14));
-                const sprintEnd = new Date(sprintStart);
-                sprintEnd.setDate(sprintStart.getDate() + 13);
-                sprintDates.set(sprintNumber, { start: sprintStart, end: sprintEnd });
-                planningResult.sprintDates[sprintNumber] = { start: sprintStart, end: sprintEnd };
-            }
-            break;
-        }
-    }
-
     // Bepaal de sprint planning
     for (const sprintNumber of sprintNumbers) {
-        const sprintDate = sprintDates.get(sprintNumber);
+        const sprintDate = existingSprintDates?.[sprintNumber] || { start: new Date(), end: new Date() };
         if (!sprintDate) {
             logger.error(`Geen datums gevonden voor sprint ${sprintNumber}`);
             continue;
